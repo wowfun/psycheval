@@ -145,7 +145,13 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     json.loads(body),
-                    {"authentication_enabled": True, "role": "guest"},
+                    {
+                        "authentication_enabled": True,
+                        "admin_login_enabled": True,
+                        "annotator_login_enabled": False,
+                        "role": "guest",
+                        "user_id": None,
+                    },
                 )
                 self.assertEqual(headers["cache-control"], "no-store")
                 self.assertEqual(headers["x-content-type-options"], "nosniff")

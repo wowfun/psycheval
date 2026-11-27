@@ -57,6 +57,7 @@ from psycheval.serve.api_access import (
     ADMIN_ACCESS,
     GUEST_ACCESS,
     access,
+    identity_for,
     is_localhost_request,
     mutation_guard,
     require_admin,
@@ -584,7 +585,8 @@ def _register_static_routes(app: FastAPI) -> None:
 def _serve_page(request: Request, page: str) -> HTMLResponse:
     runtime: ServeRuntime = request.app.state.runtime
     access_control: ServeAccess = request.app.state.access
-    role = role_for(request)
+    current = identity_for(request)
+    role = current.role
     csp_nonce = secrets.token_urlsafe(24)
     return HTMLResponse(
         render_serve_html(
@@ -604,7 +606,10 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
             workspace_id=runtime.workspace_id,
             workspace_description=runtime.config.description,
             role=role,
+            user_id=current.user_id,
             authentication_enabled=access_control.authentication_enabled,
+            admin_login_enabled=access_control.admin_login_enabled,
+            annotator_login_enabled=access_control.annotator_login_enabled,
             local_client=(role == ADMIN_ROLE and is_localhost_request(request)),
             serve_page=page,
             csp_nonce=csp_nonce,
@@ -664,7 +669,12 @@ def _register_session_routes(app: FastAPI) -> None:
         access_control: ServeAccess = request.app.state.access
         client = request.client.host if request.client is not None else "unknown"
         try:
-            token = access_control.login(body.password, client)
+            token, logged_in = access_control.login_session(
+                body.password,
+                client,
+                role=body.role,
+                user_id=body.user_id,
+            )
         except AuthenticationDisabled as exc:
             raise ProblemException(409, str(exc)) from exc
         except InvalidCredentials as exc:
@@ -675,8 +685,16 @@ def _register_session_routes(app: FastAPI) -> None:
                 "too many failed login attempts",
                 headers={"Retry-After": str(exc.retry_after)},
             ) from exc
+        except ValueError as exc:
+            raise ProblemException(422, str(exc)) from exc
         return _json(
-            {"authentication_enabled": True, "role": ADMIN_ROLE},
+            {
+                "authentication_enabled": access_control.authentication_enabled,
+                "admin_login_enabled": access_control.admin_login_enabled,
+                "annotator_login_enabled": access_control.annotator_login_enabled,
+                "role": logged_in.role,
+                "user_id": logged_in.user_id,
+            },
             headers={"Set-Cookie": access_control.session_cookie(token)},
         )
 
@@ -688,12 +706,14 @@ def _register_session_routes(app: FastAPI) -> None:
         if token is not None:
             runtime: ServeRuntime = request.app.state.runtime
             runtime.acp.revoke_session(token)
+        next_role = GUEST_ROLE if access_control.authentication_enabled else ADMIN_ROLE
         return _json(
             {
                 "authentication_enabled": access_control.authentication_enabled,
-                "role": (
-                    GUEST_ROLE if access_control.authentication_enabled else ADMIN_ROLE
-                ),
+                "admin_login_enabled": access_control.admin_login_enabled,
+                "annotator_login_enabled": access_control.annotator_login_enabled,
+                "role": next_role,
+                "user_id": None if next_role == GUEST_ROLE else "admin",
             },
             headers={"Set-Cookie": access_control.expired_session_cookie()},
         )

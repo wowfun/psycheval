@@ -486,7 +486,13 @@ def main() -> None:
                 origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
                 config = uvicorn.Config(
                     create_app(
-                        runtime, ServeAccess(os.environ.get("PEVAL_E2E_PASSWORD"))
+                        runtime,
+                        ServeAccess(
+                            os.environ.get("PEVAL_E2E_PASSWORD"),
+                            annotator_password=os.environ.get(
+                                "PEVAL_E2E_ANNOTATOR_PASSWORD"
+                            ),
+                        ),
                     ),
                     host="127.0.0.1",
                     port=0,

@@ -24,7 +24,10 @@ def render_serve_html(
     workspace_id: str | None = None,
     workspace_description: str | None = None,
     role: str = "admin",
+    user_id: str | None = None,
     authentication_enabled: bool = False,
+    admin_login_enabled: bool | None = None,
+    annotator_login_enabled: bool = False,
     local_client: bool = False,
     serve_page: str = "home",
     csp_nonce: str = "static-render",
@@ -33,13 +36,26 @@ def render_serve_html(
     normalized_page = normalize_serve_page(serve_page)
     normalized_locale = normalize_locale(locale)
     messages = messages_for(normalized_locale)
+    admin_enabled = (
+        bool(authentication_enabled)
+        if admin_login_enabled is None
+        else bool(admin_login_enabled)
+    )
+    annotator_enabled = bool(annotator_login_enabled)
+    auth_enabled = bool(authentication_enabled or admin_enabled or annotator_enabled)
+    resolved_user_id = (
+        user_id if user_id is not None else ("admin" if role == "admin" else None)
+    )
     render_options: dict[str, Any] = {
         "effective_timezone": effective_timezone,
         "adapter_defaults": adapter_defaults or {},
         "loading": bool(loading),
         "workspace_id": workspace_id or "default",
         "role": role,
-        "authentication_enabled": bool(authentication_enabled),
+        "user_id": resolved_user_id,
+        "authentication_enabled": auth_enabled,
+        "admin_login_enabled": admin_enabled,
+        "annotator_login_enabled": annotator_enabled,
         "local_client": bool(local_client),
         "initial_page": normalized_page,
         "csp_nonce": csp_nonce,
@@ -62,7 +78,8 @@ def render_serve_html(
             normalized_locale,
             page=normalized_page,
             role=role,
-            authentication_enabled=authentication_enabled,
+            user_id=resolved_user_id,
+            authentication_enabled=auth_enabled,
         ),
     )
     payload = payload.replace(
@@ -79,7 +96,9 @@ def render_serve_html(
         render_serve_overlays(
             messages,
             role=role,
-            authentication_enabled=authentication_enabled,
+            authentication_enabled=auth_enabled,
+            admin_login_enabled=admin_enabled,
+            annotator_login_enabled=annotator_enabled,
         ),
     )
     payload = payload.replace("__TITLE__", escape(messages["serve_title"]))

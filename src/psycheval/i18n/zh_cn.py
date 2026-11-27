@@ -1071,4 +1071,12 @@ ZH_CN_MESSAGES: dict[str, str] = {
     "task_summary_list_overlap": "一个任务可属于多个值，分组计数可能重叠。",
     "edit": "编辑",
     "reveal_in_file_manager": "在文件管理器中显示",
+    "serve_annotator_role": "标注人员",
+    "serve_login_role": "登录身份",
+    "serve_annotator_user_id": "用户 ID",
+    "serve_annotator_user_id_placeholder": "例如：alice",
+    "serve_annotator_password": "标注人员密码",
+    "serve_login_copy_roles": "选择标注人员（需填写用户 ID）或管理员登录。",
+    "serve_login_copy_annotator": "输入用户 ID 与标注人员密码以添加和管理标注评论。",
+    "serve_user_id_required": "请输入用户 ID",
 }

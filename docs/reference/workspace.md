@@ -700,15 +700,29 @@ For a missing or removed source (HTTP 404/410), the sidebar uses the catalog's
 existing summary and marks the trajectory unavailable. Temporary server or
 network failures remain errors and do not fabricate missing evidence.
 
-Serve has anonymous `guest` and authenticated `admin` roles. Without
-authentication, only a local listener is allowed and requests act as admin. A
-non-local bind requires `PEVAL_ADMIN_PASSWORD`, read first from the process and
-then from a regular non-symlink workspace `.env` file.
+Serve has anonymous `guest`, authenticated `annotator`, and authenticated `admin`
+roles using one process-local `peval_session` HttpOnly `SameSite=Strict` cookie.
+Without authentication passwords, only a local listener is allowed and requests
+act as `admin` (`user_id = "admin"`). A non-local bind requires
+`PEVAL_ADMIN_PASSWORD`, read first from the process and then from a regular
+non-symlink workspace `.env` file. Optional `PEVAL_ANNOTATOR_PASSWORD` (read with
+the same precedence) enables annotator password login; annotators must supply a
+non-empty single-line `user_id` (at most 64 UTF-8 bytes without control
+characters; `"admin"` is reserved case-insensitively), which is bound to the
+session, shown in the header role badge, and stamped on every comment they
+author. Because annotators share one workspace password, `user_id` is
+self-asserted attribution rather than per-user cryptographic authentication.
 
 Guests receive allowlisted, path-safe projections and read-only exports.
-Administrators may inspect source locations, refresh, and mutate workspace or
-Dataset state. Authorization is centralized and unclassified routes fail
-closed; hiding a browser control is not an access check.
+Annotators receive the same path-safe projections as guests plus CRUD access only
+to workspace-overlay scoring-item comments and Trial scoring-result comments
+(restricted to editing or deleting comments matching their own annotator
+`user_id`); configuration, source paths, Task/Dataset file edits, `task.toml`
+metadata writes, Trial notes/tags/state edits, Job execution, Judge runs, ACP
+Copilot, and localhost file-manager reveal remain administrator-only.
+Administrators may inspect source locations, refresh, moderate any comment, and
+mutate workspace or Dataset state. Authorization is centralized and unclassified
+routes fail closed; hiding a browser control is not an access check.
 
 The bundled UI uses the unversioned `/api` resource interface. Successful
 responses are direct resource representations; HTTP errors use Problem Details.

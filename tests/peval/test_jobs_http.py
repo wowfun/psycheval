@@ -67,7 +67,7 @@ def test_preferred_harness_requires_admin_and_current_revision(client, jobs):
     payload = {"harness": "fixture", "revision": options["revision"]}
     assert client.put("/api/jobs/preferred-harness", json=payload).status_code == 403
     token = client.app.state.access.login("fixture-password", "testclient")
-    client.cookies.set("peval_admin_session", token)
+    client.cookies.set("peval_session", token)
     assert (
         client.put(
             "/api/jobs/preferred-harness",
@@ -89,7 +89,7 @@ def test_http_start_without_preview(client):
     payload = {"request": request(), "request_id": "direct-http-start"}
     assert client.post("/api/jobs", json=payload).status_code == 403
     token = client.app.state.access.login("fixture-password", "testclient")
-    client.cookies.set("peval_admin_session", token)
+    client.cookies.set("peval_session", token)
     response = client.post("/api/jobs", json=payload)
     assert response.status_code == 200
     assert response.json()["request"] == request()

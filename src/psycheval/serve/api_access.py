@@ -8,11 +8,18 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request, WebSocket, WebSocketException
 from fastapi.routing import APIRoute, APIWebSocketRoute
 
-from psycheval.serve.access import ADMIN_ROLE, ServeAccess
+from psycheval.serve.access import (
+    ADMIN_ROLE,
+    ANNOTATOR_ROLE,
+    GUEST_ROLE,
+    ServeAccess,
+    SessionIdentity,
+)
 from psycheval.serve.api_http import ProblemException
 
-AccessLevel = Literal["guest", "admin"]
+AccessLevel = Literal["guest", "annotator", "admin"]
 GUEST_ACCESS: AccessLevel = "guest"
+ANNOTATOR_ACCESS: AccessLevel = "annotator"
 ADMIN_ACCESS: AccessLevel = "admin"
 
 
@@ -24,14 +31,40 @@ def access(level: AccessLevel) -> Callable[[Callable[..., Any]], Callable[..., A
     return decorate
 
 
-def role_for(request: Request) -> str:
+def identity_for(request: Request) -> SessionIdentity:
     control: ServeAccess = request.app.state.access
-    return control.role(request.headers.get("cookie"))
+    return control.identity(request.headers.get("cookie"))
+
+
+def role_for(request: Request) -> str:
+    return identity_for(request).role
+
+
+def require_annotator(request: Request) -> SessionIdentity:
+    current = identity_for(request)
+    if current.role not in {ADMIN_ROLE, ANNOTATOR_ROLE}:
+        slug = (
+            "session-expired"
+            if current.role == GUEST_ROLE
+            and request.app.state.access.authentication_enabled
+            else None
+        )
+        raise ProblemException(
+            403, "annotator or administrator access required", slug=slug
+        )
+    return current
 
 
 def require_admin(request: Request) -> None:
-    if role_for(request) != ADMIN_ROLE:
-        raise ProblemException(403, "administrator access required")
+    current = identity_for(request)
+    if current.role != ADMIN_ROLE:
+        slug = (
+            "session-expired"
+            if current.role == GUEST_ROLE
+            and request.app.state.access.authentication_enabled
+            else None
+        )
+        raise ProblemException(403, "administrator access required", slug=slug)
 
 
 _FORWARDING_HEADERS = (
@@ -162,6 +195,7 @@ def mutation_guard(request: Request) -> None:
 def verify_route_access(app: FastAPI) -> None:
     missing = []
     unenforced_admin = []
+    unenforced_annotator = []
     for route in app.routes:
         if not isinstance(route, (APIRoute, APIWebSocketRoute)):
             continue
@@ -181,10 +215,19 @@ def verify_route_access(app: FastAPI) -> None:
                 for dependency in route.dependant.dependencies
             ):
                 unenforced_admin.append(label)
+        elif level == ANNOTATOR_ACCESS:
+            if isinstance(route, APIWebSocketRoute) or not any(
+                dependency.call is require_annotator
+                for dependency in route.dependant.dependencies
+            ):
+                unenforced_annotator.append(label)
     if missing:
         raise RuntimeError(f"serve routes missing access classification: {missing}")
     if unenforced_admin:
         raise RuntimeError(
-            "serve administrator routes missing administrator dependency: "
-            f"{unenforced_admin}"
+            f"serve administrator routes missing administrator dependency: {unenforced_admin}"
+        )
+    if unenforced_annotator:
+        raise RuntimeError(
+            f"serve annotator routes missing annotator dependency: {unenforced_annotator}"
         )

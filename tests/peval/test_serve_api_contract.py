@@ -355,6 +355,8 @@ class ServeApiContractTests(unittest.TestCase):
         self.assertIn("exceeds serve limit", json.loads(body)["detail"])
 
     def test_admin_access_classification_requires_enforcement(self) -> None:
+        from psycheval.serve.api_access import ANNOTATOR_ACCESS
+
         app = FastAPI()
 
         @app.get("/unsafe")
@@ -364,6 +366,16 @@ class ServeApiContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "administrator dependency"):
             _verify_route_access(app)
+
+        annotator_app = FastAPI()
+
+        @annotator_app.post("/unsafe-comment")
+        @access(ANNOTATOR_ACCESS)
+        def unsafe_comment() -> dict[str, bool]:
+            return {"unsafe": True}
+
+        with self.assertRaisesRegex(RuntimeError, "annotator dependency"):
+            _verify_route_access(annotator_app)
 
     def test_batch_task_operations_require_strong_item_etags(self) -> None:
         status, headers, body = self.request(

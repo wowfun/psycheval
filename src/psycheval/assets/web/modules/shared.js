@@ -68,7 +68,14 @@ function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocale
 function hasMetricValue(value) {
   return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value));
 }
-function adminMode() { return RENDER_OPTIONS?.role !== "guest"; }
+function roleName() {
+  const role = RENDER_OPTIONS?.role;
+  return role === undefined || role === null || role === "" ? "admin" : role;
+}
+function adminMode() { return roleName() === "admin"; }
+function annotatorMode() { return roleName() === "annotator"; }
+function canAnnotate() { return adminMode() || annotatorMode(); }
+function currentUserId() { return RENDER_OPTIONS?.user_id || (adminMode() ? "admin" : null); }
 function authenticationEnabled() { return Boolean(RENDER_OPTIONS?.authentication_enabled); }
 function localFileRevealEnabled() { return adminMode() && Boolean(RENDER_OPTIONS?.local_client); }
 function listValue(value) { return Array.isArray(value) ? value : []; }
@@ -78,8 +85,11 @@ export {
   I18N,
   RENDER_OPTIONS,
   adminMode,
+  annotatorMode,
   authenticationEnabled,
   browserStorage,
+  canAnnotate,
+  currentUserId,
   esc,
   fmtCost,
   fmtDate,

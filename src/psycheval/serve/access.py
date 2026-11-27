@@ -4,6 +4,7 @@ import math
 import os
 import secrets
 import time
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
@@ -13,26 +14,35 @@ from threading import Lock
 from dotenv import dotenv_values
 
 ADMIN_PASSWORD_ENV = "PEVAL_ADMIN_PASSWORD"
+ANNOTATOR_PASSWORD_ENV = "PEVAL_ANNOTATOR_PASSWORD"
 ADMIN_ROLE = "admin"
+ANNOTATOR_ROLE = "annotator"
 GUEST_ROLE = "guest"
-SESSION_COOKIE_NAME = "peval_admin_session"
+SESSION_COOKIE_NAME = "peval_session"
 SESSION_IDLE_SECONDS = 12 * 60 * 60
 LOGIN_WINDOW_SECONDS = 60
 LOGIN_FAILURE_LIMIT = 5
+MAX_USER_ID_BYTES = 64
 
 __all__ = [
     "ADMIN_PASSWORD_ENV",
+    "ANNOTATOR_PASSWORD_ENV",
     "ADMIN_ROLE",
+    "ANNOTATOR_ROLE",
     "GUEST_ROLE",
     "SESSION_COOKIE_NAME",
     "SESSION_IDLE_SECONDS",
     "LOGIN_WINDOW_SECONDS",
     "LOGIN_FAILURE_LIMIT",
+    "MAX_USER_ID_BYTES",
     "AuthenticationDisabled",
     "InvalidCredentials",
     "LoginRateLimited",
     "ServeAccess",
+    "SessionIdentity",
     "resolve_admin_password",
+    "resolve_annotator_password",
+    "validate_user_id",
 ]
 
 
@@ -49,13 +59,45 @@ class LoginRateLimited(ValueError):
     retry_after: int
 
 
-def resolve_admin_password(
+@dataclass(frozen=True, slots=True)
+class SessionIdentity:
+    role: str
+    user_id: str | None = None
+
+
+@dataclass(slots=True)
+class _SessionRecord:
+    role: str
+    user_id: str | None
+    last_seen: float
+
+
+def validate_user_id(value: str | None) -> str:
+    if not isinstance(value, str):
+        raise ValueError("user_id is required")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("user_id must not be empty")
+    if len(normalized.encode("utf-8")) > MAX_USER_ID_BYTES:
+        raise ValueError(f"user_id must be at most {MAX_USER_ID_BYTES} UTF-8 bytes")
+    if any(
+        ch in {"\n", "\r", "\t"} or unicodedata.category(ch) == "Cc"
+        for ch in normalized
+    ):
+        raise ValueError("user_id must be a single line without control characters")
+    if normalized.casefold() == ADMIN_ROLE:
+        raise ValueError("user_id 'admin' is reserved")
+    return normalized
+
+
+def _resolve_env_password(
     workspace_root: str | Path,
+    env_name: str,
     *,
     environ: Mapping[str, str] | None = None,
 ) -> str | None:
     values = os.environ if environ is None else environ
-    process_value = values.get(ADMIN_PASSWORD_ENV)
+    process_value = values.get(env_name)
     if process_value:
         return process_value
 
@@ -68,8 +110,26 @@ def resolve_admin_password(
         dotenv = dotenv_values(env_path, encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise ValueError(f"failed to read workspace dotenv: {env_path}") from exc
-    file_value = dotenv.get(ADMIN_PASSWORD_ENV)
+    file_value = dotenv.get(env_name)
     return file_value if isinstance(file_value, str) and file_value else None
+
+
+def resolve_admin_password(
+    workspace_root: str | Path,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    return _resolve_env_password(workspace_root, ADMIN_PASSWORD_ENV, environ=environ)
+
+
+def resolve_annotator_password(
+    workspace_root: str | Path,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    return _resolve_env_password(
+        workspace_root, ANNOTATOR_PASSWORD_ENV, environ=environ
+    )
 
 
 class ServeAccess:
@@ -79,13 +139,15 @@ class ServeAccess:
         self,
         password: str | None,
         *,
+        annotator_password: str | None = None,
         now: Callable[[], float] = time.monotonic,
         token_factory: Callable[[], str] | None = None,
     ) -> None:
         self._password = password or None
+        self._annotator_password = annotator_password or None
         self._now = now
         self._token_factory = token_factory or (lambda: secrets.token_urlsafe(32))
-        self._sessions: dict[str, float] = {}
+        self._sessions: dict[str, _SessionRecord] = {}
         self._failures: dict[str, list[float]] = {}
         self._lock = Lock()
 
@@ -100,38 +162,77 @@ class ServeAccess:
     ) -> ServeAccess:
         return cls(
             resolve_admin_password(workspace_root, environ=environ),
+            annotator_password=resolve_annotator_password(
+                workspace_root, environ=environ
+            ),
             now=now,
             token_factory=token_factory,
         )
 
     @property
-    def authentication_enabled(self) -> bool:
+    def admin_login_enabled(self) -> bool:
         return self._password is not None
 
+    @property
+    def annotator_login_enabled(self) -> bool:
+        return self._annotator_password is not None
+
+    @property
+    def authentication_enabled(self) -> bool:
+        return self.admin_login_enabled or self.annotator_login_enabled
+
     def session_payload(self, cookie_header: str | None) -> dict[str, object]:
+        current = self.identity(cookie_header)
         return {
             "authentication_enabled": self.authentication_enabled,
-            "role": self.role(cookie_header),
+            "admin_login_enabled": self.admin_login_enabled,
+            "annotator_login_enabled": self.annotator_login_enabled,
+            "role": current.role,
+            "user_id": current.user_id,
         }
 
-    def role(self, cookie_header: str | None) -> str:
+    def identity(self, cookie_header: str | None) -> SessionIdentity:
         if not self.authentication_enabled:
-            return ADMIN_ROLE
+            return SessionIdentity(ADMIN_ROLE, "admin")
         token = self._session_token(cookie_header)
         now = self._now()
         with self._lock:
             self._prune_expired(now)
             if token is None:
-                return GUEST_ROLE
-            last_seen = self._sessions.get(token)
-            if last_seen is None:
-                return GUEST_ROLE
-            self._sessions[token] = now
-        return ADMIN_ROLE
+                return SessionIdentity(GUEST_ROLE, None)
+            record = self._sessions.get(token)
+            if record is None:
+                return SessionIdentity(GUEST_ROLE, None)
+            record.last_seen = now
+            return SessionIdentity(record.role, record.user_id)
 
-    def login(self, password: str, client_address: str) -> str:
-        if not self.authentication_enabled:
-            raise AuthenticationDisabled("administrator authentication is disabled")
+    def role(self, cookie_header: str | None) -> str:
+        return self.identity(cookie_header).role
+
+    def login_session(
+        self,
+        password: str,
+        client_address: str,
+        *,
+        role: str = ADMIN_ROLE,
+        user_id: str | None = None,
+    ) -> tuple[str, SessionIdentity]:
+        if role not in {ADMIN_ROLE, ANNOTATOR_ROLE}:
+            raise ValueError(f"unsupported login role: {role}")
+        expected_password = (
+            self._password if role == ADMIN_ROLE else self._annotator_password
+        )
+        if expected_password is None:
+            label = "administrator" if role == ADMIN_ROLE else "annotator"
+            raise AuthenticationDisabled(f"{label} authentication is disabled")
+        resolved_user_id: str | None
+        if role == ANNOTATOR_ROLE:
+            resolved_user_id = validate_user_id(user_id)
+        else:
+            if user_id is not None and user_id.strip():
+                raise ValueError("user_id is only accepted for annotator login")
+            resolved_user_id = "admin"
+
         now = self._now()
         with self._lock:
             self._prune_expired(now)
@@ -142,17 +243,32 @@ class ServeAccess:
                     math.ceil(LOGIN_WINDOW_SECONDS - (now - failures[0])),
                 )
                 raise LoginRateLimited(retry_after)
-            assert self._password is not None
             if not secrets.compare_digest(
-                password.encode("utf-8"), self._password.encode("utf-8")
+                password.encode("utf-8"), expected_password.encode("utf-8")
             ):
                 failures.append(now)
                 self._failures[client_address] = failures
-                raise InvalidCredentials("invalid administrator password")
+                label = "administrator" if role == ADMIN_ROLE else "annotator"
+                raise InvalidCredentials(f"invalid {label} password")
             self._failures.pop(client_address, None)
             token = self._token_factory()
-            self._sessions[token] = now
-            return token
+            self._sessions[token] = _SessionRecord(
+                role=role, user_id=resolved_user_id, last_seen=now
+            )
+            return token, SessionIdentity(role, resolved_user_id)
+
+    def login(
+        self,
+        password: str,
+        client_address: str,
+        *,
+        role: str = ADMIN_ROLE,
+        user_id: str | None = None,
+    ) -> str:
+        token, _identity = self.login_session(
+            password, client_address, role=role, user_id=user_id
+        )
+        return token
 
     def active_session_token(self, cookie_header: str | None) -> str | None:
         if not self.authentication_enabled:
@@ -163,9 +279,10 @@ class ServeAccess:
         now = self._now()
         with self._lock:
             self._prune_expired(now)
-            if token not in self._sessions:
+            record = self._sessions.get(token)
+            if record is None or record.role != ADMIN_ROLE:
                 return None
-            self._sessions[token] = now
+            record.last_seen = now
             return token
 
     def logout(self, cookie_header: str | None) -> str | None:
@@ -208,9 +325,9 @@ class ServeAccess:
     def _prune_expired(self, now: float) -> None:
         session_cutoff = now - SESSION_IDLE_SECONDS
         self._sessions = {
-            token: last_seen
-            for token, last_seen in self._sessions.items()
-            if last_seen > session_cutoff
+            token: record
+            for token, record in self._sessions.items()
+            if record.last_seen > session_cutoff
         }
         failure_cutoff = now - LOGIN_WINDOW_SECONDS
         self._failures = {

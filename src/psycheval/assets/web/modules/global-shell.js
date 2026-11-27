@@ -44,7 +44,12 @@ function bindAuthenticationControls() {
     });
   });
   const dialog = document.querySelector("[data-admin-login-dialog]");
-  dialog?.querySelector("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
+  const form = dialog?.querySelector("[data-admin-login-form]");
+  form?.addEventListener("submit", submitAdminLogin);
+  form?.querySelectorAll('input[name="role"]').forEach(input => {
+    input.addEventListener("change", () => syncLoginRoleFields(form));
+  });
+  if (form) syncLoginRoleFields(form);
   document.querySelectorAll("[data-admin-logout]").forEach(button => {
     button.addEventListener("click", async event => {
       event.preventDefault();
@@ -61,19 +66,51 @@ function bindAuthenticationControls() {
   });
 }
 
+function selectedLoginRole(form) {
+  const checked = form?.querySelector?.('input[name="role"]:checked');
+  if (checked) return String(checked.value || "admin");
+  const hidden = form?.querySelector?.('input[name="role"]');
+  return String(hidden?.value || form?.dataset?.defaultLoginRole || "admin");
+}
+
+function syncLoginRoleFields(form) {
+  if (!form) return;
+  const role = selectedLoginRole(form);
+  const isAnnotator = role === "annotator";
+  const userField = form.querySelector("[data-login-user-id-field]");
+  const userInput = /** @type {HTMLInputElement | null} */ (form.querySelector('input[name="user_id"]'));
+  if (userField) userField.hidden = !isAnnotator;
+  if (userInput) {
+    userInput.disabled = !isAnnotator;
+    userInput.required = isAnnotator;
+  }
+  const passwordLabel = form.querySelector("[data-login-password-label]");
+  if (passwordLabel) {
+    passwordLabel.textContent = isAnnotator
+      ? t("serve_annotator_password", "Annotator password")
+      : t("serve_admin_password", "Administrator password");
+  }
+}
+
 function openAdminLogin(opener = null) {
   const dialog = document.querySelector("[data-admin-login-dialog]");
   if (!dialog) return false;
+  const form = dialog.querySelector("[data-admin-login-form]");
+  if (form) syncLoginRoleFields(form);
   beginFeedback("[data-admin-login-status]", { key: "shell:login" }).clear();
   const status = dialog.querySelector("[data-admin-login-status]");
   if (status) {
     status.setAttribute("hidden", "");
     status.textContent = "";
   }
+  const isAnnotator = selectedLoginRole(form) === "annotator";
+  const focusTarget = isAnnotator
+    ? dialog.querySelector('input[name="user_id"]:not([disabled])') || dialog.querySelector('[name="password"]')
+    : dialog.querySelector('[name="password"]');
   openModalSurface(dialog, {
     opener,
     bodyClass: "admin-login-open",
-    focusTarget: dialog.querySelector('[name="password"]'),
+    focusTarget,
     onRequestClose: closeAdminLogin,
   });
   return true;
@@ -86,12 +123,23 @@ function closeAdminLogin(options = {}) {
 async function submitAdminLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const password = String(new FormData(form).get("password") || "");
+  const role = selectedLoginRole(form);
+  const formData = new FormData(form);
+  const password = String(formData.get("password") || "");
+  const userId = String(formData.get("user_id") || "").trim();
   const feedback = beginFeedback("[data-admin-login-status]", { key: "shell:login" });
+  if (role === "annotator" && !userId) {
+    feedback.error(t("serve_user_id_required", "Enter your User ID"));
+    form.querySelector('[name="user_id"]')?.focus?.();
+    return;
+  }
   const submit = form.querySelector('[type="submit"]');
   if (submit) submit.disabled = true;
   try {
-    await serveApi("/api/session", { method: "POST", body: { password } });
+    const body = role === "annotator"
+      ? { role, user_id: userId, password }
+      : { role, password };
+    await serveApi("/api/session", { method: "POST", body });
     window.location.reload();
   } catch (error) {
     feedback.error(error.message || t("serve_login_failed", "Login failed"));

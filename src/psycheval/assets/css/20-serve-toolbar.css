@@ -55,6 +55,20 @@
   background:color-mix(in oklch,var(--focus),var(--surface) 92%);
   color:var(--focus);
 }
+.serve-role-badge.annotator {
+  border-color:color-mix(in oklch,var(--pass),var(--rule) 50%);
+  background:color-mix(in oklch,var(--pass),var(--surface) 92%);
+  color:var(--pass);
+  max-width:240px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.serve-role-badge .serve-role-user {
+  text-transform:none;
+  letter-spacing:0;
+  font-weight:600;
+}
 .serve-role-badge.guest {
   color:var(--muted);
 }
@@ -121,6 +135,45 @@
 }
 .auth-dialog .serve-notice {
   position:static;
+}
+.auth-role-switch {
+  margin:0;
+  padding:0;
+  border:0;
+  display:grid;
+  gap:6px;
+}
+.auth-role-switch legend {
+  padding:0;
+  color:var(--muted);
+  font:700 12px/1.2 var(--mono);
+}
+.auth-role-options {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+}
+.auth-role-option {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:36px;
+  padding:0 10px;
+  border:1px solid var(--rule);
+  border-radius:6px;
+  background:var(--surface-2);
+  color:var(--ink);
+  font:600 13px/1.2 var(--sans);
+  cursor:pointer;
+}
+.auth-role-option input {
+  width:auto;
+  min-height:0;
+  margin:0;
+}
+.auth-role-option:has(input:checked) {
+  border-color:var(--focus);
+  background:color-mix(in oklch,var(--focus),var(--surface) 92%);
 }
 .serve-notice {
   position:absolute;

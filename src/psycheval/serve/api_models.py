@@ -25,7 +25,9 @@ class StrictRequest(BaseModel):
 
 
 class LoginRequest(StrictRequest):
+    role: Literal["admin", "annotator"] = "admin"
     password: str = Field(min_length=1)
+    user_id: str | None = None
 
 
 class CatalogQueryRequest(StrictRequest):

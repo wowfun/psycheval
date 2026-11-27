@@ -24,7 +24,7 @@ def run_serve_command(args: CliArgs) -> None:
     runtime: ServeRuntime | None = None
     try:
         access = ServeAccess.from_workspace(store.paths.root)
-        host = validate_bind_host(raw_host, access.authentication_enabled)
+        host = validate_bind_host(raw_host, access.admin_login_enabled)
         config = apply_overrides(
             load_config(workspace_root=store.paths.root),
             args,

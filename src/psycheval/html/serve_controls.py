@@ -12,6 +12,7 @@ def render_serve_header(
     *,
     page: str,
     role: str = "admin",
+    user_id: str | None = None,
     authentication_enabled: bool = False,
 ) -> str:
     pages = [
@@ -47,6 +48,21 @@ def render_serve_header(
             '<span class="acp-launch-mark" aria-hidden="true"></span></button>'
             + render_language_control(messages, locale)
         )
+    elif role == "annotator":
+        badge_label = escape(messages["serve_annotator_role"])
+        if user_id:
+            escaped_user = escape(str(user_id))
+            badge_label += (
+                f' · <span class="serve-role-user" title="{escaped_user}">'
+                f"{escaped_user}</span>"
+            )
+        auth_control = (
+            f'<span class="serve-role-badge annotator" data-session-role-badge>{badge_label}</span>'
+            + '<button class="action-button" type="button" data-admin-logout>'
+            + escape(messages["serve_logout"])
+            + "</button>"
+        )
+        language = ""
     else:
         auth_control = (
             '<span class="serve-role-badge guest">'
@@ -200,10 +216,20 @@ def render_serve_overlays(
     *,
     role: str,
     authentication_enabled: bool,
+    admin_login_enabled: bool | None = None,
+    annotator_login_enabled: bool = False,
 ) -> str:
     parts: list[str] = []
-    if role != "admin" and authentication_enabled:
-        parts.append(render_auth_dialog(messages))
+    if role == "guest" and authentication_enabled:
+        parts.append(
+            render_auth_dialog(
+                messages,
+                admin_login_enabled=(
+                    True if admin_login_enabled is None else admin_login_enabled
+                ),
+                annotator_login_enabled=annotator_login_enabled,
+            )
+        )
     parts.append(render_view_save_dialog(messages, role=role))
     parts.append(
         '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
@@ -236,11 +262,57 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
   </aside>"""
 
 
-def render_auth_dialog(messages: dict[str, str]) -> str:
+def render_auth_dialog(
+    messages: dict[str, str],
+    *,
+    admin_login_enabled: bool = True,
+    annotator_login_enabled: bool = False,
+) -> str:
     login = escape(messages["serve_login"])
-    login_copy = escape(messages["serve_login_copy"])
     close = escape(messages["close"])
+    admin_role = escape(messages["serve_admin_role"])
+    annotator_role = escape(messages["serve_annotator_role"])
     admin_password = escape(messages["serve_admin_password"])
+    annotator_password = escape(messages["serve_annotator_password"])
+    user_id_label = escape(messages["serve_annotator_user_id"])
+    user_id_placeholder = escape(messages["serve_annotator_user_id_placeholder"])
+    both = admin_login_enabled and annotator_login_enabled
+    default_role = "annotator" if annotator_login_enabled else "admin"
+    if both:
+        login_copy = escape(messages["serve_login_copy_roles"])
+        role_control = f"""
+        <fieldset class="auth-role-switch" data-login-role-switch>
+          <legend>{escape(messages["serve_login_role"])}</legend>
+          <div class="auth-role-options">
+            <label class="auth-role-option">
+              <input type="radio" name="role" value="annotator" checked>
+              <span>{annotator_role}</span>
+            </label>
+            <label class="auth-role-option">
+              <input type="radio" name="role" value="admin">
+              <span>{admin_role}</span>
+            </label>
+          </div>
+        </fieldset>"""
+    else:
+        login_copy = escape(
+            messages["serve_login_copy_annotator"]
+            if annotator_login_enabled
+            else messages["serve_login_copy"]
+        )
+        role_control = f'<input type="hidden" name="role" value="{default_role}">'
+
+    user_id_field = ""
+    if annotator_login_enabled:
+        hidden_attr = "" if default_role == "annotator" else " hidden"
+        req_attr = " required" if default_role == "annotator" else " disabled"
+        user_id_field = f"""
+        <label data-login-user-id-field{hidden_attr}>{user_id_label}
+          <input name="user_id" type="text" autocomplete="username" placeholder="{user_id_placeholder}"{req_attr}>
+        </label>"""
+    password_label = (
+        annotator_password if default_role == "annotator" else admin_password
+    )
     return f"""
   <div class="auth-backdrop" data-admin-login-dialog hidden>
     <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
@@ -251,8 +323,8 @@ def render_auth_dialog(messages: dict[str, str]) -> str:
         </div>
         <button class="action-button compact" type="button" data-admin-login-close aria-label="{close}">{close}</button>
       </header>
-      <form data-admin-login-form>
-        <label>{admin_password}
+      <form data-admin-login-form data-default-login-role="{default_role}">{role_control}{user_id_field}
+        <label><span data-login-password-label>{password_label}</span>
           <input name="password" type="password" autocomplete="current-password" required>
         </label>
         <p class="serve-notice" data-admin-login-status aria-live="polite" hidden></p>

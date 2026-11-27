@@ -1,12 +1,17 @@
 // @ts-check
 
 import { invalidateWorkspace } from "../app/workspace-runtime.js";
-import { adminMode, authenticationEnabled, t } from "./shared.js";
+import { adminMode, annotatorMode, authenticationEnabled, t } from "./shared.js";
 
 const responseEtags = new Map();
 
-function reloadExpiredAdminSession(response) {
-  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
+function reloadExpiredAdminSession(response, problem = null) {
+  if (response?.status !== 403 || !authenticationEnabled()) return false;
+  const type = problem && typeof problem === "object" ? problem.type : null;
+  const expired = type
+    ? type === "urn:peval:problem:session-expired"
+    : adminMode();
+  if (!expired || (!adminMode() && !annotatorMode())) return false;
   if (window.location.pathname === "/config") window.location.assign("/");
   else window.location.reload();
   return true;
@@ -36,12 +41,12 @@ async function serveApi(path, options = {}) {
   const responseEtag = response.headers?.get?.("ETag");
   if (response.ok && responseEtag) responseEtags.set(etagKey, responseEtag);
   const text = await response.text();
-  if (!response.ok) reloadExpiredAdminSession(response);
   let payload = {};
   if (text) {
     try {
       payload = JSON.parse(text);
     } catch (cause) {
+      if (!response.ok) reloadExpiredAdminSession(response);
       const message = response.ok
         ? t("serve_invalid_json_response", "Server returned an invalid JSON response")
         : response.statusText || `HTTP ${response.status}`;
@@ -52,6 +57,7 @@ async function serveApi(path, options = {}) {
       throw error;
     }
   }
+  if (!response.ok) reloadExpiredAdminSession(response, payload);
   if (!response.ok) {
     if (payload?.committed === true) publishInvalidations(response, path, method, options.body);
     const error = /** @type {Error & {status: number, problem?: unknown}} */ (

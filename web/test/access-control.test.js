@@ -397,7 +397,7 @@ test("guest login dialog submits credentials, reports failure, and closes", asyn
     await tick();
     assert.deepEqual(calls, [{
       path: "/api/session",
-      body: { password: "wrong" },
+      body: { role: "admin", password: "wrong" },
     }]);
     assert.equal(dialog.querySelector("[data-admin-login-status]").hidden, false);
     assert.match(dialog.querySelector("[data-admin-login-status]").textContent, /invalid administrator password/);
@@ -407,3 +407,73 @@ test("guest login dialog submits credentials, reports failure, and closes", asyn
     globalThis.fetch = previousFetch;
   }
 });
+
+test("dual-role login toggles annotator user_id, validates required id, and submits annotator credentials", async () => {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  const originalHtml = dialog.innerHTML;
+  dialog.innerHTML = `
+    <section aria-modal="true">
+      <button data-admin-login-close type="button">Close</button>
+      <form data-admin-login-form>
+        <div data-login-role-switch>
+          <label><input type="radio" name="role" value="admin" checked>Admin</label>
+          <label><input type="radio" name="role" value="annotator">Annotator</label>
+        </div>
+        <label data-login-user-id-field hidden>
+          <span>User ID</span>
+          <input name="user_id" type="text" value="">
+        </label>
+        <label>
+          <span data-login-password-label>Administrator password</span>
+          <input name="password" type="password" value="ann-secret">
+        </label>
+        <p data-admin-login-status hidden></p>
+        <button type="submit">Log in</button>
+      </form>
+    </section>
+  `;
+  globalThis.fetch = async (path, options = {}) => {
+    calls.push({ path: String(path), body: JSON.parse(String(options.body)) });
+    return {
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      text: async () => JSON.stringify({ detail: "invalid annotator password" }),
+    };
+  };
+  try {
+    shell.bindAuthenticationControls();
+    document.querySelector("[data-admin-login-open]").click();
+    const userField = dialog.querySelector("[data-login-user-id-field]");
+    const userInput = dialog.querySelector('input[name="user_id"]');
+    const annotatorRadio = dialog.querySelector('input[name="role"][value="annotator"]');
+    assert.equal(userField.hidden, true);
+
+    annotatorRadio.checked = true;
+    annotatorRadio.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(userField.hidden, false);
+    assert.equal(userInput.required, true);
+
+    // Blank user_id fails client validation before hitting network.
+    userInput.value = "   ";
+    dialog.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    assert.equal(calls.length, 0);
+    assert.equal(dialog.querySelector("[data-admin-login-status]").hidden, false);
+
+    userInput.value = "  alice  ";
+    dialog.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    assert.deepEqual(calls, [{
+      path: "/api/session",
+      body: { role: "annotator", user_id: "alice", password: "ann-secret" },
+    }]);
+    dialog.querySelector("[data-admin-login-close]").click();
+  } finally {
+    globalThis.fetch = previousFetch;
+    dialog.innerHTML = originalHtml;
+  }
+});
+

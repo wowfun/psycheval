@@ -77,7 +77,10 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "workspace_id": "workspace-one",
                 "effective_timezone": "UTC",
                 "role": "guest",
+                "user_id": None,
                 "authentication_enabled": False,
+                "admin_login_enabled": False,
+                "annotator_login_enabled": False,
                 "local_client": False,
                 "initial_page": "home",
                 "csp_nonce": "static-render",
@@ -137,12 +140,43 @@ class PevalServeHtmlTests(unittest.TestCase):
                     rf'data-workspace-page="{page}"(?![^>]*\shidden(?:\s|>))',
                 )
 
-        guest_html = render_serve_html(role="guest")
+        guest_html = render_serve_html(
+            role="guest",
+            authentication_enabled=True,
+            admin_login_enabled=True,
+            annotator_login_enabled=True,
+        )
         self.assertIn('data-workspace-page="home"', guest_html)
         self.assertIn('data-workspace-page="datasets"', guest_html)
         self.assertIn('data-workspace-page="reports"', guest_html)
         self.assertNotIn('data-workspace-page="config"', guest_html)
         self.assertNotIn("data-config-page aria-label", guest_html)
+        self.assertIn("data-login-role-switch", guest_html)
+        self.assertIn('name="user_id"', guest_html)
+
+        annotator_html = render_serve_html(
+            role="annotator",
+            user_id="alice",
+            authentication_enabled=True,
+            admin_login_enabled=True,
+            annotator_login_enabled=True,
+        )
+        self.assertIn('data-workspace-page="home"', annotator_html)
+        self.assertIn('data-workspace-page="datasets"', annotator_html)
+        self.assertIn('data-workspace-page="reports"', annotator_html)
+        self.assertNotIn('data-workspace-page="config"', annotator_html)
+        self.assertNotIn("data-config-page aria-label", annotator_html)
+        self.assertNotIn('class="acp-drawer"', annotator_html)
+        self.assertNotIn("data-locale-select", annotator_html)
+        self.assertIn("data-session-role-badge", annotator_html)
+        self.assertIn("Annotator · ", annotator_html)
+        self.assertIn(
+            '<span class="serve-role-user" title="alice">alice</span>', annotator_html
+        )
+        self.assertIn("data-admin-logout", annotator_html)
+        self.assertEqual(
+            script_json(annotator_html, "peval-render-options")["user_id"], "alice"
+        )
 
     def test_admin_acp_drawer_starts_with_compact_agent_controls(self) -> None:
         html = render_serve_html(role="admin")

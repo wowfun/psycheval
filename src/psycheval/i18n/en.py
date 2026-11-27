@@ -1071,4 +1071,12 @@ EN_MESSAGES: dict[str, str] = {
     "task_summary_list_overlap": "A Task can belong to multiple values; group counts may overlap.",
     "edit": "Edit",
     "reveal_in_file_manager": "Reveal in file manager",
+    "serve_annotator_role": "Annotator",
+    "serve_login_role": "Sign in as",
+    "serve_annotator_user_id": "User ID",
+    "serve_annotator_user_id_placeholder": "e.g. alice",
+    "serve_annotator_password": "Annotator password",
+    "serve_login_copy_roles": "Sign in as an annotator (with your User ID) or administrator.",
+    "serve_login_copy_annotator": "Enter your User ID and annotator password to add and manage annotation comments.",
+    "serve_user_id_required": "Enter your User ID",
 }
