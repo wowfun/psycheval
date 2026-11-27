@@ -85,6 +85,7 @@ ordinary verifier compiles a fixed scoring plan, executes built-in and script
 checks, and aggregates their results independently of execution.
 Its optional YAML Judge reads declared text evidence and merges complete rubric
 assessments with the rule score; it does not depend on the WorkBuddy runtime.
+See the [Harbor verifier contract](reference/harbor-verifier.md).
 The verifier's settings module owns native Judge connection parsing and
 normalization, shared with WorkBuddy's native-configuration fallback; each
 consumer owns its completeness and execution validation.
@@ -110,6 +111,7 @@ It remains a standard-library-only file that can also be copied separately.
 `harbor.agents` interfaces. Its `sessions` module owns native
 session discovery, parsing, conversion, normalization, and metadata projection.
 Import-only Claude, Psychevo, and Deepagents adapters do not imply execution support.
+See [Harbor Agent adapters](reference/harbor-agents.md).
 `psycheval.adapters` owns third-party registration and protocol admission;
 `psycheval.conversion` translates application configuration and dispatches inputs.
 Converters accept explicit ConversionOptions, paths, and selected session roots,

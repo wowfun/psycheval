@@ -244,7 +244,7 @@ peak-memory use.
 Third-party parsers can allocate or decompress PDF streams before returning
 text or facts. Parser execution therefore still needs the verifier's process
 timeout and environment resource controls for hostile inputs. Existing Judge text-read
-budgets continue to apply independently; see [Harbor](harbor.md#yaml-llm-judge).
+budgets continue to apply independently; see [Harbor verifier](harbor-verifier.md#yaml-llm-judge).
 
 ```python
 from psycheval.harbor.documents import inspect_document, select_document

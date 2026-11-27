@@ -56,9 +56,9 @@ names without separators or redundant spelling aliases.
 
 Public Python seams are `build_scoring_plan(config)`, `evaluate(...)`, and
 `aggregate(checks, *, plan)` in `psycheval.harbor.verifier`; the module CLI is
-`python -m psycheval.harbor.verifier`. The [Harbor contract](harbor.md#script-checks-and-weighted-scoring)
+`python -m psycheval.harbor.verifier`. The [Harbor verifier contract](harbor-verifier.md#script-checks-and-weighted-scoring)
 owns custom script checks, fixed scoring items, and weighted partial credit.
-Its optional [YAML Judge](harbor.md#yaml-llm-judge) adds text-quality scoring
+Its optional [YAML Judge](harbor-verifier.md#yaml-llm-judge) adds text-quality scoring
 without changing deterministic continuation gates. Incomplete model assessments
 retain the rule score and their failure reason rather than a partial LLM score.
 

@@ -12,7 +12,9 @@ Both `tests/test.sh` and `tests/test.bat` should locate Task configuration from
 their own directory and invoke the installed verifier with Python from `PATH`.
 Do not embed checkout-relative source paths or duplicate the verifier logic in
 platform wrappers. The [Harbor reference](../../reference/harbor.md) owns native
-preparation, custom checks, artifact collection and Judge configuration;
+preparation and artifact collection; the
+[Harbor verifier reference](../../reference/harbor-verifier.md) owns custom checks
+and Judge configuration;
 [document and evidence publication](../../reference/document-evidence.md) owns
 immutable source capture and the material the Judge receives.
 

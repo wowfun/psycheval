@@ -234,7 +234,7 @@ unknown, numeric zero remains a value, and Agent or wall duration is not
 relabelled as model timing.
 
 New native WorkBuddy Trials supply these statistics from their retained
-[usage evidence](harbor.md#workbuddy-usage).
+[usage evidence](harbor-agents.md#workbuddy-usage).
 Recorded partial or unavailable WorkBuddy usage coverage is projected into the
 existing read-only diagnostic display; this does not change execution or
 conversion status and does not fill missing totals.
@@ -249,7 +249,7 @@ TTFT and decoding speed. Their source labels survive conversion and projection.
 `event_observed` timestamps locate events but never authorize adjacent-timestamp
 duration estimates. Explicit native OpenCode model-call intervals still supply
 Model duration; their sources and boundaries are defined by the
-[native OpenCode contract](harbor.md#native-opencode). They do not supply TTFT or
+[native OpenCode contract](harbor-agents.md#native-opencode). They do not supply TTFT or
 decode speed. Timeline Waterfall and Timeline Detail Table use the same stage
 labels regardless of timing source: `Model: <model name>` and
 `Tool call: <tool name>`. Timing-source hover hints describe interval boundaries

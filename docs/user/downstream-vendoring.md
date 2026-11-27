@@ -62,7 +62,7 @@ verifier:
 
 Run the Job through `uv run harbor run -c job.yaml` so the Harbor process and its
 children use the downstream environment. Supply your own harness following the
-[external-harness contract](../reference/harbor.md#harness-behavior). Use the environment's Python executable for Task
+[external-harness contract](../reference/harbor-agents.md#harness-behavior). Use the environment's Python executable for Task
 verifier scripts. The selected Host verifier supplies the path-mapping protocol
 while those scripts run:
 
@@ -118,7 +118,7 @@ resolved credential values in the Python object. The reasoning effort is sent
 directly to the model API; choose a value supported by that provider and model.
 `JudgeSettings(enabled=False)` explicitly disables model
 calls. Each concurrent invocation needs its own verifier-log directory. See the
-[YAML Judge contract](../reference/harbor.md#yaml-llm-judge) for precedence,
+[YAML Judge contract](../reference/harbor-verifier.md#yaml-llm-judge) for precedence,
 validation, output, and execution semantics.
 
 Use this direct API for custom scripts whose completion your application controls.
@@ -126,7 +126,7 @@ For scripts that may hang, configure a Harbor Job's verifier timeout and execute
 verification through that Job. Cancelling the direct Python call waits for its
 current script to finish; an asyncio timeout alone cannot enforce a hard deadline.
 A hung script can also prevent interpreter exit; see the
-[execution ownership contract](../reference/harbor.md#yaml-llm-judge).
+[execution ownership contract](../reference/harbor-verifier.md#yaml-llm-judge).
 
 ## Evaluate desktop WorkBuddy through ACP
 
@@ -142,7 +142,7 @@ calling a model. Set the Job Agent's `model_name` to an advertised ID; for a
 desktop custom model this may be `custom-local:mimo-v2.6-pro`. Run the Job using
 the existing Host or WorkBuddy Host environment. Desktop configuration remains
 read-only, while Skills, MCP and restored sessions use the Trial's private state.
-See the [WorkBuddy ACP contract](../reference/harbor.md#native-workbuddy-acp) for
+See the [WorkBuddy ACP contract](../reference/harbor-agents.md#native-workbuddy-acp) for
 authentication, model selection and evidence semantics.
 
 ## Publish Judge evidence
@@ -191,7 +191,7 @@ def publish_report_evidence(context, extracted_text):
 
 The Judge reads the extracted text. Scripts can use the other runtime paths to
 read workspace files, test-owned references or the current trajectory. The
-[YAML Judge contract](../reference/harbor.md#yaml-llm-judge) defines precedence,
+[YAML Judge contract](../reference/harbor-verifier.md#yaml-llm-judge) defines precedence,
 supported text types, evidence status, limits and cleanup.
 
 ## Observe live ACP updates
@@ -220,7 +220,7 @@ agent = HostACPAgent(
 
 An `async def` callback can instead await your application's event sink. Use a
 per-Agent closure or bound method to associate updates with the correct Trial.
-The [live-update contract](../reference/harbor.md#live-session-updates) defines
+The [live-update contract](../reference/harbor-agents.md#live-session-updates) defines
 ordering, timeouts, cancellation and best-effort failure handling.
 
 For a Harbor Job, bind the callback inside a downstream subclass rather than
@@ -259,7 +259,7 @@ your application's transcript format.
 ACP evidence is retained as streaming gzip files; callbacks receive the original
 update dictionaries. For WorkBuddy evaluations with large tool arguments, set
 `max_evidence_bytes` (stored bytes) and `max_decoded_evidence_bytes` (decoded bytes)
-independently in Agent kwargs. The [evidence contract](../reference/harbor.md#permissions-and-evidence)
+independently in Agent kwargs. The [evidence contract](../reference/harbor-agents.md#permissions-and-evidence)
 defines admission, integrity checks and cleanup. Standard gzip readers can inspect
 closed evidence; keep the original files and manifest together for verification.
 
@@ -487,11 +487,11 @@ base.environment = EnvironmentConfig(
 ```
 
 Set `OPENCODE_PROVIDER_KEY` in the launching process. The adapter uses separate
-Trial state; see its [contract](../reference/harbor.md#native-opencode) for supported
+Trial state; see its [contract](../reference/harbor-agents.md#native-opencode) for supported
 configuration and retained evidence.
 
 For a downstream harness implementing the
-[external-harness contract](../reference/harbor.md#harness-behavior), replace
+[external-harness contract](../reference/harbor-agents.md#harness-behavior), replace
 `base.agents` while keeping that explicit Host environment:
 
 ```python
@@ -553,7 +553,7 @@ Use `downstream._vendor.psycheval_harbor.agents.dsh:HostDSHAgent` as the Agent i
 Harbor's explicit Agent `env`; do not rely on inherited DSH/DeepSeek configuration.
 For a vision model absent from the native catalog, declare `input: [text, image]`
 on its model profile; the native fallback for undeclared modalities is text-only.
-The [DSH contract](../reference/harbor.md#native-dsh-acp) owns Home,
+The [DSH contract](../reference/harbor-agents.md#native-dsh-acp) owns Home,
 resume, evidence and configuration semantics.
 
 ## Copy ATIF validation separately

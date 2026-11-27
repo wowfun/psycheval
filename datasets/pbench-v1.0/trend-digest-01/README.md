@@ -138,7 +138,7 @@ These provenance links identify recorded tool
 results; they do not make agent-authored parsing code or source content trusted.
 
 GitHub and X use the shared
-[continuation contract](../../../docs/reference/harbor.md#continuation-checks)
+[continuation contract](../../../docs/reference/harbor-verifier.md#continuation-checks)
 with `min_reward = { continuation = 1.0 }`. GitHub requires
 `required_call_1_tool`, `required_call_1_arguments`,
 `required_call_1_observation`, `required_artifacts`, and `final_answer` to pass.
@@ -187,7 +187,7 @@ Invalid X time windows are excluded from Judge source evidence even for empty
 post lists. Fixed rubric/check declarations are tested against the supplied
 Excel watchlist; Agent-modified workbook content cannot redefine scoring items.
 
-The [Harbor YAML Judge contract](../../../docs/reference/harbor.md#yaml-llm-judge)
+The [Harbor YAML Judge contract](../../../docs/reference/harbor-verifier.md#yaml-llm-judge)
 defines configuration and result handling. It is disabled by default. Enable
 it through `verifier.env` with `PEVAL_JUDGE_ENABLED=true`, an API base URL, model,
 and optional credential reference. A complete assessment combines 35% rule

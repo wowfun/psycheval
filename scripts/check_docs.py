@@ -19,6 +19,8 @@ REQUIRED_DOCS = {
     "docs/reference/evaluation.md",
     "docs/reference/state-and-data.md",
     "docs/reference/harbor.md",
+    "docs/reference/harbor-agents.md",
+    "docs/reference/harbor-verifier.md",
     "docs/reference/pbench.md",
     "docs/reference/cli.md",
     "docs/reference/workspace.md",

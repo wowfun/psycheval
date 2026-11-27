@@ -21,7 +21,11 @@ declare the required target dependencies; do not
 invent APIs or silently assume that a newer reference matches the target.
 
 The [Harbor integration contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md)
-owns execution and grading; the
+owns host execution and Task preparation,
+[Harbor Agent adapters](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-agents.md)
+own Agent execution and evidence admission, the
+[Harbor verifier contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-verifier.md)
+owns script checks and the YAML LLM Judge, and the
 [evaluation contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/evaluation.md)
 owns evidence semantics. Use the matching release/commit instead of `main` when
 targeting a released version. A supplied checkout can provide the same documents,
@@ -126,12 +130,12 @@ Declare `continuation_checks` using deterministic check IDs from the same plan
 and set the step's `min_reward = { continuation = 1.0 }`. Zero-weight checks can
 still be required. Read the individual step's condition; the root Trial's
 numeric average is not a whole-Trial gate result. The
-[continuation checks contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#continuation-checks)
+[continuation checks contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-verifier.md#continuation-checks)
 owns validation and publication semantics.
 
 Missing or incorrect deliverables should fail the relevant check. Dependency,
 configuration, and grader failures must remain verifier errors. See
-[script checks and weighted scoring](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#script-checks-and-weighted-scoring)
+[script checks and weighted scoring](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-verifier.md#script-checks-and-weighted-scoring)
 for the complete protocol.
 
 ## Bind retained tool and source evidence
@@ -142,7 +146,7 @@ operation in raw logs while leaving canonical identity or protocol evidence
 incomplete. Report that limitation separately from the Agent not performing the
 operation; it does not justify granting tool credit. Do not reconstruct trusted
 nested calls by interpreting arbitrary Agent-written code. The
-[permission and evidence contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#permissions-and-evidence)
+[permission and evidence contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-agents.md#permissions-and-evidence)
 owns adapter admission rules.
 
 When publishing source evidence, include legitimate supporting sources from the
@@ -280,7 +284,7 @@ Judge activation and provider settings belong to the evaluation runtime:
 complements deterministic checks; it is not an LLM-only grading mode. Disabled
 or incomplete model assessment retains the rule score, so that score alone
 cannot establish that quality was assessed. See the
-[YAML Judge contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#yaml-llm-judge)
+[YAML Judge contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor-verifier.md#yaml-llm-judge)
 for configuration and failure semantics.
 
 ## Validate execution when requested

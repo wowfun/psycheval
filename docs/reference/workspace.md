@@ -159,7 +159,7 @@ to the Task's default Instruction. Flatten scoring items replaces the count
 columns with step, ID, type, question, pass/fail criteria, scope limits, and
 artifact references. Filter Type to show rule rows, Rubric rows, or both.
 Rule rows show their
-[declared description](harbor.md#script-checks-and-weighted-scoring) in Question,
+[declared description](harbor-verifier.md#script-checks-and-weighted-scoring) in Question,
 with a blank cell when omitted. Rows with no declared items retain their Task
 context when Type is unfiltered. Selecting an item opens its actual source file.
 The `grader.json` preview shows each description under its rule ID. The flattened

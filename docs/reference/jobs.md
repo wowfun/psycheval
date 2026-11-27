@@ -107,7 +107,7 @@ control directory. TOML defaults cannot represent JSON null; saving such a value
 fails explicitly.
 
 Native Host ACP variants select
-[`psycheval.harbor.agents.acp.agent:HostACPAgent`](harbor.md#host-acp-agent) explicitly.
+[`psycheval.harbor.agents.acp.agent:HostACPAgent`](harbor-agents.md#host-acp-agent) explicitly.
 The Harbor built-in `acp` installer is rejected for native Hosts.
 Agent suggestions use the explicit Host adapter for ACP. Built-in installer
 names may still be entered for compatible non-Host environments. Environment

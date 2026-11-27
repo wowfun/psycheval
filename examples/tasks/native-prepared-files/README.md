@@ -54,6 +54,8 @@ connection settings belong to the evaluation runtime, not this example.
 
 Use the [native Host configuration](../../../docs/user/downstream-vendoring.md)
 with this Task path. The [Harbor contract](../../../docs/reference/harbor.md)
-defines preparation, script arguments, JSON results, and scoring. Source-copy
+defines preparation, and the
+[Harbor verifier contract](../../../docs/reference/harbor-verifier.md) defines
+script arguments, JSON results, and scoring. Source-copy
 installations must follow the linked vendoring guide for both entrypoints and
 custom-script imports; ordinary Psycheval installations need no import changes.
