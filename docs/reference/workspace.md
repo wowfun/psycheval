@@ -42,9 +42,13 @@ and keyboard navigation use the same list and preserve the filtering workflow.
 Only one shared table-column filter menu may be open across the workspace.
 Opening another closes the previous menu and discards its unapplied draft while
 retaining applied filters. Escape closes the menu and returns focus to its trigger.
-Local tables derive options from their complete supplied option rows, independently
-of Home initialization and catalog facets; the paginated Leaderboard uses server
-facets so choices cover the entire query rather than the visible page.
+Local tables derive each column's available filter options from their currently
+visible rows (after search and active filters), independently of Home
+initialization and catalog facets; the paginated Leaderboard uses server facets
+computed over the current query's matching rows (after search, Saved Views, and
+active column filters) across all pages. Already-selected filter values remain
+listed and active-filtered columns remain visible so filters can always be
+adjusted or cleared.
 
 The Psycheval workspace organizes retained sources, overlays, reports, Saved Views,
 Harbor mounts, and browser presentation without taking ownership of source

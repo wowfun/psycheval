@@ -7,7 +7,7 @@ import { openTimelineStep } from "./timeline-chart.js";
 
 function bindTimelineControls(target, trace, tableId, onChange) {
   const columns = timelineDetailColumns(trace.model);
-  const rows = applyDataTableControls(tableId, trace.stages, columns, trace.stages);
+  const rows = applyDataTableControls(tableId, trace.stages, columns);
   bindDataTableControls(target, {
     tableId,
     columns,
@@ -45,7 +45,7 @@ function timelineDetailColumns(model) {
 }
 function renderTimelineDetailTable(rows, model, tableId = "timeline") {
   const columns = timelineDetailColumns(model);
-  const visibleRows = applyDataTableControls(tableId, rows, columns, rows);
+  const visibleRows = applyDataTableControls(tableId, rows, columns);
   return renderDataTable({
     tableId,
     columns,
@@ -53,7 +53,6 @@ function renderTimelineDetailTable(rows, model, tableId = "timeline") {
     rowKey: row => `${row.trial_key || ""}:${row.trajectory_id || ""}:${row.step_id || ""}:${row.tool_call_id || row.kind || ""}`,
     tableClass: "timeline-table",
     shellClass: "timeline-table-shell",
-    filterOptionsRows: rows,
     rowClass: row => {
       const selected = state.selectedStep?.trialKey === row.trial_key && String(state.selectedStep?.stepId) === String(row.step_id);
       return `timeline-detail-${row.kind} timeline-detail-row clickable-row ${selected ? "selected-row" : ""}`;

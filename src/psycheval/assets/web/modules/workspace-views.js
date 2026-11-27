@@ -133,7 +133,7 @@ function workspaceViewColumns() {
 
 function workspaceViewRows() {
   const views = workspaceViews();
-  return applyDataTableControls("workspace-views", views, workspaceViewColumns(), views);
+  return applyDataTableControls("workspace-views", views, workspaceViewColumns());
 }
 
 function renderWorkspaceViewValueList(values) {
@@ -626,7 +626,6 @@ function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = worksp
       columns: workspaceViewColumns(),
       rows: views,
       rowKey: view => view.id,
-      filterOptionsRows: allViews,
       tableClass: "workspace-view-index-table",
       shellClass: "workspace-view-index-shell",
       rowClass: view => `${state.workspaceViewSelection.has(view.id) ? "selected " : ""}${state.workspaceAppliedViewNames.has(view.id) ? "applied" : ""}`,

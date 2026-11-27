@@ -102,8 +102,8 @@ function compareTableValues(left, right, type, direction) {
   const delta = type === "number" ? Number(left) - Number(right) : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
   return direction === "desc" ? -delta : delta;
 }
-function applyDataTableControls(tableId, rows, columns, filterOptionsRows = rows) {
-  return sortDataTableRows(tableId, applyDataTableFilters(tableId, rows, columns, filterOptionsRows), columns);
+function applyDataTableControls(tableId, rows, columns) {
+  return sortDataTableRows(tableId, applyDataTableFilters(tableId, rows, columns), columns);
 }
 function sortDataTableRows(tableId, rows, columns) {
   const controls = tableControls(tableId);
@@ -142,10 +142,10 @@ function tableValueAttributes(valueType, fullText = "", className = "", title = 
 function tableCellContent(html) {
   return `<div class="table-cell-content">${html}</div>`;
 }
-/** @param {{tableId: string, columns: any[], rows: any[], rowKey?: any, tableClass?: string, shellClass?: string, rowClass?: string | ((row: any) => string), rowAttrs?: string | ((row: any) => string), rowTitle?: any, emptyText?: string, filterOptionsRows?: any[]}} options */
-function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "", shellClass = "", rowClass = "", rowAttrs = "", rowTitle = null, emptyText = null, filterOptionsRows = rows }) {
+/** @param {{tableId: string, columns: any[], rows: any[], rowKey?: any, tableClass?: string, shellClass?: string, rowClass?: string | ((row: any) => string), rowAttrs?: string | ((row: any) => string), rowTitle?: any, emptyText?: string}} options */
+function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "", shellClass = "", rowClass = "", rowAttrs = "", rowTitle = null, emptyText = null }) {
   const controls = tableControls(tableId);
-  const headers = columns.map(column => renderTableHeader(tableId, column, controls, rows, filterOptionsRows)).join("");
+  const headers = columns.map(column => renderTableHeader(tableId, column, controls, rows)).join("");
   const metricExtents = new Map(columns.filter(column => column.metric).map(column => [column, metricExtent(column, rows)]));
   const rowOptions = { rowClass, rowAttrs, rowTitle, rowKey, metricExtents };
   const body = rows.length
@@ -156,7 +156,7 @@ function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "
 function renderTableShell({ tableId = "", tableClass = "", shellClass = "", head = "", body = "" }) {
   return `<div class="table-shell ${esc(shellClass)}"><div class="table-wrap" data-workspace-scroll><table class="data-table ${esc(tableClass)}"${tableId ? ` data-table-id="${esc(tableId)}"` : ""}>${head ? `<thead>${head}</thead>` : ""}<tbody>${body}</tbody></table></div></div>`;
 }
-function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
+function renderTableHeader(tableId, column, controls, rows = []) {
   if (column.select) return renderSelectionHeader(rows, column);
   const adapter = tableAdapters.get(tableId);
   const active = adapter?.isSorted ? adapter.isSorted(column.key) : controls.sort === column.key;
@@ -165,7 +165,7 @@ function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRo
   const label = column.sortable
     ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" title="${esc(column.description || column.label)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>`
     : `<span class="static-head">${esc(column.label)}</span>`;
-  const filter = column.filterable ? renderFilterControl(tableId, column, filterOptionsRows) : "";
+  const filter = column.filterable ? renderFilterControl(tableId, column, rows) : "";
   const contentClass = column.filterable ? "table-head-cell table-head-inline" : "table-head-cell";
   const valueType = tableValueType(column);
   const ariaSort = column.sortable ? ` aria-sort="${active ? (direction === "desc" ? "descending" : "ascending") : "none"}"` : "";

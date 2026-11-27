@@ -205,8 +205,8 @@ function createJobsPage({ root, app }) {
       ] : []),
     ];
     const filtered = runs.filter(row => !jobsSearch || `${row.name} ${row.harness} ${row.note || ""}`.toLowerCase().includes(jobsSearch.toLowerCase()));
-    const rows = applyDataTableControls("job-collections", filtered, columns, runs);
-    target.innerHTML = renderDataTable({ tableId: "job-collections", columns, rows, rowKey: row => row.id, filterOptionsRows: runs,
+    const rows = applyDataTableControls("job-collections", filtered, columns);
+    target.innerHTML = renderDataTable({ tableId: "job-collections", columns, rows, rowKey: row => row.id,
       rowAttrs: row => `tabindex="0" data-select-job="${esc(row.id)}" data-job-row-token="${encodeURIComponent(row.id)}"`, rowClass: row => row.id === selectedJob ? "selected-row" : "",
       emptyText: t("jobs_no_jobs_start_a_run_or_mount_retained_results", "No Jobs. Start a run or mount retained results."),
     });

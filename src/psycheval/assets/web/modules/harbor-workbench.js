@@ -89,20 +89,20 @@ function renderDatasetRegistry(force = false) {
   identity.html = row => `${identityHtml ? identityHtml(row) : esc(row.id)}${row.error ? `<span class="harbor-status-rail conflict" title="${esc(row.error)}">${esc(t("harbor_status_unavailable", "Unavailable"))}</span>` : ""}`;
   allColumns.find(column => column.key === "reports").presence = row => row.report_count > 0 ? row.report_count : null;
   const searched = datasets.filter(row => !workbenchState.registrySearch || `${row.id} ${row.note || ""}`.toLowerCase().includes(workbenchState.registrySearch.toLowerCase()));
-  const rows = applyDataTableControls("harbor-dataset-registry", searched, allColumns, datasets);
+  const rows = applyDataTableControls("harbor-dataset-registry", searched, allColumns);
   const businessColumns = allColumns.filter(column => !column.select);
   const options = { workspaceId: RENDER_OPTIONS?.workspace_id, tableId: "datasets", storage: browserStorage() };
   const columnState = workbenchState.datasetColumns;
   columnState.layout ||= loadColumnLayout(businessColumns.map(column => column.key), options);
   const layout = normalizeColumnLayout(businessColumns.map(column => column.key), columnState.layout);
-  const presence = presenceForColumns(businessColumns, rows);
+  const presence = presenceForColumns(businessColumns, rows, null, tableControls("harbor-dataset-registry").filters);
   const columns = [...allColumns.filter(column => column.select), ...resolveColumns(businessColumns, layout, presence)];
   const columnControl = createColumnControl({ id: "datasets", state: columnState, options,
     context: () => ({ columns: businessColumns, layout, presence }),
     conditionText: column => { const controls = tableControls("harbor-dataset-registry"); return [controls.sort === column.key ? controls.direction : "", controls.filters?.[column.key]?.length ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · "); },
     onRender: () => { renderDatasetRegistry(true); return root; },
   });
-  root.innerHTML = `<header class="table-region-head"><div class="table-region-title-stack"><h2>${esc(t("harbor_datasets", "Datasets"))}</h2><input type="search" data-dataset-search aria-label="${esc(t("collection_search_datasets", "Search Datasets"))}" placeholder="${esc(t("collection_search_datasets", "Search Datasets"))}" value="${esc(workbenchState.registrySearch)}"></div><div class="table-region-actions"><button class="action-button" type="button" data-harbor-refresh>${esc(t("serve_refresh", "Refresh"))}</button>${columnControl.render()}${workbenchState.datasetFilter ? `<button class="action-button" data-dataset-clear>${esc(t("clear_filters", "Clear filters"))}: ${esc(workbenchState.datasetFilter)}</button>` : ""}${adminMode() && registryManager.ready ? `<button class="action-button" data-harbor-add-dataset>${esc(t("harbor_add_dataset", "New Dataset"))}</button><button class="action-button" data-harbor-register-dataset>${esc(t("harbor_register_dataset", "Register existing"))}</button><button class="action-button danger" data-harbor-unregister-datasets ${registryManager.selectedDatasets.size ? "" : "disabled"}>${esc(t("harbor_unregister_selected", "Unregister selected"))}</button>` : ""}</div></header><div data-harbor-dataset-registry>${renderDataTable({ tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id, filterOptionsRows: datasets,
+  root.innerHTML = `<header class="table-region-head"><div class="table-region-title-stack"><h2>${esc(t("harbor_datasets", "Datasets"))}</h2><input type="search" data-dataset-search aria-label="${esc(t("collection_search_datasets", "Search Datasets"))}" placeholder="${esc(t("collection_search_datasets", "Search Datasets"))}" value="${esc(workbenchState.registrySearch)}"></div><div class="table-region-actions"><button class="action-button" type="button" data-harbor-refresh>${esc(t("serve_refresh", "Refresh"))}</button>${columnControl.render()}${workbenchState.datasetFilter ? `<button class="action-button" data-dataset-clear>${esc(t("clear_filters", "Clear filters"))}: ${esc(workbenchState.datasetFilter)}</button>` : ""}${adminMode() && registryManager.ready ? `<button class="action-button" data-harbor-add-dataset>${esc(t("harbor_add_dataset", "New Dataset"))}</button><button class="action-button" data-harbor-register-dataset>${esc(t("harbor_register_dataset", "Register existing"))}</button><button class="action-button danger" data-harbor-unregister-datasets ${registryManager.selectedDatasets.size ? "" : "disabled"}>${esc(t("harbor_unregister_selected", "Unregister selected"))}</button>` : ""}</div></header><div data-harbor-dataset-registry>${renderDataTable({ tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id,
     rowClass: row => row.id === workbenchState.datasetFilter ? "selected-row" : "", rowAttrs: row => `tabindex="0" data-dataset-row="${esc(row.id)}"`, emptyText: t("harbor_dataset_empty", "No Datasets registered") })}</div>`;
   bindDataTableControls(root, { tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id, onChange: () => renderDatasetRegistry(true), onSelectionChange: renderDatasetRegistry });
   columnControl.bind(root);
@@ -627,7 +627,7 @@ function resolveTaskTableColumns(allColumns, filteredRows) {
   const options = taskColumnOptions(workbenchState.flattened);
   columnState.layout ||= loadColumnLayout(businessColumns.map(col => col.key), options);
   const layout = normalizeColumnLayout(businessColumns.map(col => col.key), columnState.layout, options);
-  const presence = presenceForColumns(businessColumns, filteredRows);
+  const presence = presenceForColumns(businessColumns, filteredRows, null, tableControls(HARBOR_TABLE_ID).filters);
   const columns = [...allColumns.filter(col => col.select), ...resolveColumns(businessColumns, layout, presence)];
   return { columns, businessColumns, layout, presence, columnState, options };
 }
@@ -637,7 +637,7 @@ function visibleOverviewRows(rows = overviewRows(), columns = harborColumns()) {
   const searched = query ? rows.filter(row => taskSearchText(row).includes(query)) : rows;
   return workbenchState.flattened && !workbenchState.showTrash
     ? applyDataTableFilters(HARBOR_TABLE_ID, flattenTaskRows(searched), columns)
-    : applyDataTableControls(HARBOR_TABLE_ID, searched, columns, rows);
+    : applyDataTableControls(HARBOR_TABLE_ID, searched, columns);
 }
 
 function overviewTable() {

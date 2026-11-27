@@ -208,6 +208,9 @@ test("Dataset leads existing layouts and uses query-wide presence and server fac
     assert.equal(catalog.catalogSortKey(dataset.key), "dataset");
     runtime.state.catalogPage.column_presence.dataset_id = 0;
     assert.equal(leaderboard.displayLeaderboardColumns([{}]).some(column => column.key === "dataset_id"), false);
+    tables.setFilterValues("leaderboard", "dataset_id", ["alpha"]);
+    assert.equal(leaderboard.displayLeaderboardColumns([{}]).some(column => column.key === "dataset_id"), true);
+    tables.clearFilter("leaderboard", "dataset_id");
     runtime.state.leaderboardColumnLayout.visibility.dataset_id = "show";
     assert.equal(leaderboard.displayLeaderboardColumns([{}])[1].key, "dataset_id");
   } finally {

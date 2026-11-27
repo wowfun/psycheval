@@ -55,8 +55,8 @@ function semanticValuePresent(value) {
   return true;
 }
 
-function presenceForColumns(columns, rows, serverPresence = null) {
-  return Object.fromEntries(columns.map(column => {
+function presenceForColumns(columns, rows, serverPresence = null, activeFilters = null) {
+  const result = Object.fromEntries(columns.map(column => {
     if (serverPresence && Object.prototype.hasOwnProperty.call(serverPresence, column.key)) {
       return [column.key, Number(serverPresence[column.key]) > 0];
     }
@@ -65,6 +65,17 @@ function presenceForColumns(columns, rows, serverPresence = null) {
     ));
     return [column.key, present];
   }));
+  if (activeFilters) {
+    for (const column of columns) {
+      const active = typeof activeFilters === "function"
+        ? activeFilters(column.key)
+        : activeFilters[column.key];
+      if (Array.isArray(active) ? active.length > 0 : Boolean(active)) {
+        result[column.key] = true;
+      }
+    }
+  }
+  return result;
 }
 
 function columnVisibleForLayout(column, layout, presence) {

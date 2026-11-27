@@ -149,7 +149,12 @@ function leaderboardColumnContext(rows = deps.leaderboardRows()) {
   const columns = leaderboardColumns();
   const layout = leaderboardColumnLayout(columns);
   const serverPresence = deps.state.catalogPage?.column_presence;
-  const presence = presenceForColumns(columns, rows, serverPresence);
+  const presence = presenceForColumns(
+    columns,
+    rows,
+    serverPresence,
+    key => activeFilterValues("leaderboard", key),
+  );
   return { columns, layout, presence };
 }
 function displayLeaderboardColumns(rows = deps.leaderboardRows()) {
@@ -194,7 +199,6 @@ function renderLeaderboard(rows = deps.leaderboardRows()) {
       columns,
       rows,
       rowKey: row => row.source_key || row.trial_key,
-      filterOptionsRows: deps.reportRows(),
       rowClass: row => `clickable-row ${row.source_key === deps.state.selectedSourceKey ? "selected-row" : ""}`,
       rowAttrs: row => `data-source-key="${esc(row.source_key)}"`,
       rowTitle: row => row.artifact_trial_key || row.trial_key,
