@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import xlsxwriter
@@ -117,11 +118,13 @@ TASK_COLUMNS = {
     "rule_count": ("task_rules", "Rules"),
     "rubric_count": ("task_rubrics", "Rubrics"),
     "scoring_item_count": ("task_scoring_items", "Scoring items"),
+    "scoring_comment_count": ("scoring_comments", "Scoring comments"),
 }
 ITEM_COLUMNS = {
     key: value
     for key, value in TASK_COLUMNS.items()
-    if key not in {"rule_count", "rubric_count", "scoring_item_count"}
+    if key
+    not in {"rule_count", "rubric_count", "scoring_item_count", "scoring_comment_count"}
 } | {
     "step": ("task_scoring_step", "Step"),
     "id": ("task_scoring_id", "ID"),
@@ -131,6 +134,7 @@ ITEM_COLUMNS = {
     "fail_criteria": ("task_scoring_fail", "Fail criteria"),
     "scope_limits": ("task_scoring_scope", "Scope limits"),
     "artifact_refs": ("task_scoring_artifacts", "Artifact refs"),
+    "scoring_comments": ("comments", "Comments"),
 }
 SUMMARY_COLUMNS = {
     "group": ("summary_group_by", "Group by"),
@@ -173,14 +177,43 @@ def task_summary(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, An
 
 
 def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, Any]]:
+    from psycheval.state.comments import (
+        ScoringCommentStore,
+        attach_task_scoring_comments,
+        resolve_dataset_comment_key,
+    )
+
+    config_path = getattr(library, "config_path", None)
+    comment_store = (
+        ScoringCommentStore(config_path.parent) if config_path is not None else None
+    )
+    harbor_datasets = getattr(getattr(library, "config", None), "harbor_datasets", ())
     datasets = {}
     for ref in request.rows:
         if ref.dataset_id not in datasets:
             projected = project_harbor_inventory(
                 library.task_inventory(ref.dataset_id), role
             )
+            dataset_cfg = next(
+                (item for item in harbor_datasets if item.id == ref.dataset_id),
+                None,
+            )
+            dataset_comments = (
+                comment_store.read_dataset(
+                    resolve_dataset_comment_key(
+                        Path(dataset_cfg.path),
+                        dataset_id=dataset_cfg.id,
+                        dataset_format=dataset_cfg.format,
+                    )
+                )
+                if comment_store is not None and dataset_cfg is not None
+                else {}
+            )
             datasets[ref.dataset_id] = {
-                task["directory"]: task for task in projected["datasets"][0]["tasks"]
+                task["directory"]: attach_task_scoring_comments(
+                    task, dataset_comments.get(str(task.get("directory") or ""), {})
+                )
+                for task in projected["datasets"][0]["tasks"]
             }
     custom_columns = [
         (key, parse_custom_column_id(key))
@@ -239,7 +272,11 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
             row = {
                 **row,
                 **{
-                    key: (item or {}).get(key)
+                    key: (
+                        (item or {}).get("comments", [])
+                        if key == "scoring_comments"
+                        else (item or {}).get(key)
+                    )
                     for key in ITEM_COLUMNS
                     if key not in TASK_COLUMNS
                 },
@@ -325,6 +362,7 @@ def build_task_export(
                     "pass_criteria",
                     "fail_criteria",
                     "scope_limits",
+                    "scoring_comments",
                 }
                 else 24,
             )
@@ -336,7 +374,11 @@ def build_task_export(
                         value = messages["summary_overall"]
                     elif value is None:
                         value = messages["task_group_unset"]
-                if isinstance(value, list):
+                if key == "scoring_comments" and isinstance(value, list):
+                    from psycheval.state.comments import format_comments_for_export
+
+                    value = format_comments_for_export(value)
+                elif isinstance(value, list):
                     value = "\n".join(
                         item
                         if isinstance(item, str)

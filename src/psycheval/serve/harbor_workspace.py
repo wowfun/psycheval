@@ -381,7 +381,18 @@ class HarborWorkspace:
         target = root / new_name
         if target.exists():
             raise HarborConflictError(f"Task directory already exists: {new_name}")
-        source.replace(target)
+        from psycheval.state.comments import ScoringCommentStore
+
+        dataset_key = self._dataset_comment_key(dataset)
+        store = ScoringCommentStore(self.config_path.parent)
+        with store.lease("Scoring comment move"):
+            source.replace(target)
+            try:
+                store.move_task_comments_locked(dataset_key, source.name, new_name)
+            except Exception:
+                if target.exists() and not source.exists():
+                    target.replace(source)
+                raise
         return self.task_detail(dataset_id, new_name)
 
     def rename_archived_task(
@@ -477,6 +488,14 @@ class HarborWorkspace:
             raise HarborWorkspaceError(
                 "Task restore cleanup failed; restore was rolled back"
             ) from exc
+        original_name = str(metadata["directory"])
+        if original_name != target_name:
+            from psycheval.state.comments import ScoringCommentStore
+
+            dataset_key = self._dataset_comment_key(dataset)
+            ScoringCommentStore(self.config_path.parent).move_task_comments(
+                dataset_key, original_name, target_name
+            )
         return self.task_detail(dataset_id, target_name)
 
     def purge_task(
@@ -490,7 +509,16 @@ class HarborWorkspace:
         root = self._mutable_dataset_root(dataset)
         entry = self._trash_entry(root, entry_id)
         self._expect_revision(entry, expected_revision)
+        original_dir = self._trash_entry_directory(entry)
         shutil.rmtree(entry)
+        if original_dir and not (root / original_dir).exists():
+            if not self._other_trash_references_directory(root, original_dir):
+                from psycheval.state.comments import ScoringCommentStore
+
+                dataset_key = self._dataset_comment_key(dataset)
+                ScoringCommentStore(self.config_path.parent).delete_task_comments(
+                    dataset_key, original_dir
+                )
         return self.task_inventory(dataset_id)
 
     def delete_task(
@@ -505,7 +533,70 @@ class HarborWorkspace:
         task_dir = self._task_path(root, task)
         self._expect_revision(task_dir, expected_revision)
         shutil.rmtree(task_dir)
+        from psycheval.state.comments import ScoringCommentStore
+
+        dataset_key = self._dataset_comment_key(dataset)
+        ScoringCommentStore(self.config_path.parent).delete_task_comments(
+            dataset_key, task_dir.name
+        )
         return {"dataset_id": dataset_id, "task": task}
+
+    def _dataset_comment_key(
+        self,
+        dataset: HarborDataset,
+        *,
+        source_root: Path | None = None,
+        manifest: Any = None,
+    ) -> str:
+        from psycheval.state.comments import resolve_dataset_comment_key
+
+        return resolve_dataset_comment_key(
+            source_root if source_root is not None else Path(dataset.path),
+            dataset_id=dataset.id,
+            dataset_format=dataset.format,
+            manifest=manifest,
+        )
+
+    def _trash_entry_directory(self, entry: Path) -> str | None:
+        try:
+            metadata = self._trash_metadata(entry)
+        except (HarborWorkspaceError, HarborConflictError, OSError, ValueError):
+            return None
+        value = metadata.get("directory")
+        return str(value).strip() if isinstance(value, str) and value.strip() else None
+
+    def _other_trash_references_directory(self, root: Path, directory: str) -> bool:
+        trash_root = root / TRASH_DIRNAME
+        if not trash_root.is_dir():
+            return False
+        for candidate in trash_root.iterdir():
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+            if self._trash_entry_directory(candidate) == directory:
+                return True
+        return False
+
+    def resolve_task_for_comments(
+        self,
+        dataset_id: str,
+        task: str,
+        *,
+        include_scoring_keys: bool = False,
+    ) -> tuple[str, str, set[str]]:
+        dataset = self._dataset(dataset_id)
+        self._validate_dataset_directory(Path(dataset.path))
+        dataset_root, task_root = locate_harbor_dataset(dataset.path, dataset.format)
+        task_dir = self._task_path(task_root, task)
+        dataset_key = self._dataset_comment_key(dataset, source_root=dataset_root)
+        valid_keys: set[str] = set()
+        if include_scoring_keys:
+            scoring = self._task_scoring(dataset, task_dir)
+            valid_keys = {
+                str(item.get("key") or "")
+                for item in scoring.get("scoring_items", [])
+                if isinstance(item, dict)
+            }
+        return dataset_key, task_dir.name, valid_keys
 
     def task_location(self, dataset_id: str, task: str) -> dict[str, Path]:
         dataset = self._dataset(dataset_id)
@@ -522,6 +613,18 @@ class HarborWorkspace:
         root = resolved.task_root
         task_dir = self._task_path(root, task)
         summary = self._task_projection(dataset, task_dir, resolved)
+        from psycheval.state.comments import (
+            ScoringCommentStore,
+            attach_task_scoring_comments,
+        )
+
+        dataset_key = self._dataset_comment_key(
+            dataset, source_root=resolved.source_root, manifest=resolved.manifest
+        )
+        task_comments = ScoringCommentStore(self.config_path.parent).read_task(
+            dataset_key, str(summary.get("directory") or task)
+        )
+        summary = attach_task_scoring_comments(summary, task_comments)
         tree = self._file_tree(task_dir, editable=not resolved.read_only)
         return {
             "dataset_id": dataset_id,

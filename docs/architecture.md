@@ -23,6 +23,10 @@ consumes the relocatable Harbor integration. See the [Jobs contract](reference/j
 services return native results; the serve boundary adds workspace Trial links.
 `state.collections` owns workspace Dataset/Job notes and Job archival overlays;
 source discovery consumes that archival state before reading Trial directories.
+`state.comments` owns workspace-owned plain-text comment threads for Dataset
+scoring items and retained-source scoring results, including file leases,
+concurrency checks, and author ownership rules; `serve.comments` owns their HTTP
+routes and catalog/task invalidation boundaries.
 `redaction` owns credential filtering shared by Jobs and retained-file reads.
 `file_access` supplies non-following file descriptors and per-file coordination
 leases; each consumer owns its
@@ -165,9 +169,10 @@ owns bounded file enumeration, preview, and download within that directory. The
 owns filesystem access and content limits. `serve.file_reveal` owns local-only,
 administrator-triggered native file manager reveal for paths already validated by
 `state.verification_files` or `serve.harbor_workspace`. The
-browser shares file-tree and selection primitives between Task editing and
-read-only verification; format renderers interpret selected retained documents
-without changing the canonical score projection.
+browser shares file-tree, scoring-file preview, scoring-item comment, and
+selection primitives between Datasets Task editing/browsing, Home Trial Task
+inspection, and read-only verification; format renderers interpret selected
+retained documents without changing the canonical score projection.
 Verifier artifact previews and downloads use that Verification file boundary.
 
 The browser UI is one persistent document. The server renders every page shell

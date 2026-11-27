@@ -23,6 +23,7 @@ from psycheval.serve.summary_xlsx import (
 )
 from psycheval.serve.visibility import project_catalog_rows, project_report
 from psycheval.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
+from psycheval.state.comments import format_comments_for_export
 
 MAX_REPORT_EXPORT_CELLS = 100
 MAX_REPORT_EXPORT_INPUT_BYTES = 50 * 1024 * 1024
@@ -207,6 +208,10 @@ def xlsx_summary(
         ("Cache-read Tokens", lambda row: row.get("cache_read_tokens")),
         ("Cache Samples", lambda row: row.get("cache_sample_count")),
         ("#Analysis", lambda row: int(row.get("analysis_count") or 0)),
+        (
+            "Comments",
+            lambda row: format_comments_for_export(row.get("review_comments") or []),
+        ),
         ("Source Key", lambda row: row.get("source_key")),
     ]
     definitions = (

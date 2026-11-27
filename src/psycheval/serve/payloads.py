@@ -103,6 +103,7 @@ def catalog_post_query_payload(
         "jobs",
         "providers",
         "datasets",
+        "review_comments",
         "inline_views",
         "metric_scope",
     }
@@ -140,6 +141,9 @@ def catalog_post_query_payload(
             providers=tuple(
                 _string_array(value.get("providers", []), "query providers")
             ),
+            review_comments=tuple(
+                _string_array(value.get("review_comments", []), "query review_comments")
+            ),
         ).normalized()
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
@@ -159,7 +163,7 @@ def _strict_catalog_summary_query_payload(
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
     if (
-        set(query_value) - {"inline_views", "metric_scope"}
+        set(query_value) - {"inline_views", "metric_scope", "review_comments"}
         != _CATALOG_SUMMARY_QUERY_FIELDS
     ):
         raise HttpError(400, "catalog query fields are invalid")
@@ -187,6 +191,11 @@ def _strict_catalog_summary_query_payload(
             providers=tuple(
                 _string_array(query_value.get("providers"), "query providers")
             ),
+            review_comments=tuple(
+                _string_array(
+                    query_value.get("review_comments", []), "query review_comments"
+                )
+            ),
         ).normalized()
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
@@ -205,6 +214,7 @@ def catalog_summary_payload(value: Any) -> CatalogSummaryPayload:
     if set(value) - {
         "inline_views",
         "metric_scope",
+        "review_comments",
     } != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
         raise HttpError(400, "catalog summary fields are invalid")
     group_by = value.get("group_by")
@@ -234,7 +244,9 @@ def inline_view_queries(value: Any) -> tuple[CatalogQuery, ...]:
         raise HttpError(400, "inline_views must be a bounded filter array")
     if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
         raise HttpError(400, "inline_views exceeds the sharing byte limit")
-    fields = _CATALOG_SUMMARY_QUERY_FIELDS - {"views", "browser_views"}
+    fields = (_CATALOG_SUMMARY_QUERY_FIELDS - {"views", "browser_views"}) | {
+        "review_comments"
+    }
     queries = []
     for filters in value:
         if not isinstance(filters, dict) or not set(filters).issubset(fields):

@@ -318,6 +318,7 @@ def view_filters_dict(query: CatalogQuery) -> dict[str, Any]:
         ("tasks", normalized.tasks),
         ("jobs", normalized.jobs),
         ("providers", normalized.providers),
+        ("review_comments", normalized.review_comments),
     ):
         if values:
             filters[key] = list(values)
@@ -338,6 +339,7 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
         "tasks",
         "jobs",
         "providers",
+        "review_comments",
     }
     if not isinstance(value, dict) or not set(value).issubset(allowed_fields):
         raise ValueError("view filters contain unsupported fields")
@@ -367,6 +369,7 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
         tasks=values("tasks"),
         jobs=values("jobs"),
         providers=values("providers"),
+        review_comments=values("review_comments"),
     ).normalized()
 
 

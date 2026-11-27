@@ -42,6 +42,7 @@ HARBOR_SOURCE_FILES = (
 HARBOR_OVERLAY_FILES = (
     "state.json",
     "notes.md",
+    "review_comments.json",
     "analysis.json",
     "analysis.md",
 )
@@ -59,6 +60,7 @@ LOCAL_FINGERPRINT_FILES = (
     "agent/trajectory_meta.json",
     ".peval/state.json",
     "notes.md",
+    "review_comments.json",
     "analysis.json",
     "analysis.md",
 )

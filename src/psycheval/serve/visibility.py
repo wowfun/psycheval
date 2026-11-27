@@ -300,6 +300,8 @@ def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
                 "rule_count_source",
                 "scoring_items",
                 "scoring_paths",
+                "scoring_comments",
+                "scoring_comment_count",
             )
             if key in value
         },

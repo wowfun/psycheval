@@ -136,6 +136,7 @@ def catalog_query(raw_query: str) -> CatalogQuery:
             jobs=repeated("job", "jobs"),
             providers=repeated("provider", "providers"),
             datasets=repeated("dataset", "datasets"),
+            review_comments=repeated("review_comment", "review_comments"),
             include_unreadable=first("surface", "leaderboard") == "sources",
         ).normalized()
     except ValueError as exc:
@@ -165,6 +166,7 @@ def catalog_query_payload(value: Any) -> CatalogQuery:
             jobs=tuple(value.get("jobs") or ()),
             providers=tuple(value.get("providers") or ()),
             datasets=tuple(value.get("datasets") or ()),
+            review_comments=tuple(value.get("review_comments") or ()),
         ).normalized()
     except (TypeError, ValueError) as exc:
         raise HttpError(400, str(exc)) from exc

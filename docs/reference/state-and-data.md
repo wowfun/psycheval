@@ -75,7 +75,7 @@ or incompatible cache requires a complete initial build. The workspace
 | Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to ordinary CLI views |
 | Canonical evaluation report | Harbor parent Trial or local source-cell `analysis.md` | Source-scoped publication and deletion through EvaluationReports; local Markdown imports use the same writer |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
-| Aliases, state, notes, local analysis JSON, report bindings | Workspace overlay | Explicit user mutation |
+| Aliases, state, notes, scoring/review comments, local analysis JSON, report bindings | Workspace overlay | Explicit user mutation |
 | Copilot session aliases, pins and archives | Workspace-root `.peval-copilot-<agent>.json`, keyed by session ID | Explicit administrator edit |
 | Imported report package | Workspace `reports/` directory | Explicit package mutation through WorkspaceReportLibrary |
 | Catalog rows, summaries, JSON/XLSX exports | Derived data | Rebuildable from authorities |
@@ -206,6 +206,56 @@ unreadable, and oversized files project an empty note.
 Note presence reflects non-blank readable content. Saving or clearing a note refreshes
 the catalog projection through the existing generation-aware mutation flow;
 the workspace note remains authoritative.
+
+### Annotation comments
+
+Workspace-owned annotation comments store ordered plain-text comment lists without
+modifying Dataset files or Trial evidence. Each comment requires a non-empty `id`
+and non-empty UTF-8 `body` (when created or edited via the API, at most 8 KiB,
+rejecting `Cc` control characters other than `\n`, `\r`, and `\t`); `author_id`
+and `updated_at_ms` are optional metadata stamped by the server on API writes
+(omitted fields are preserved on disk and hidden in the UI), and each read
+projects a computed `revision` token for `If-Match` optimistic concurrency. Each
+target admits at most 200 comments and each overlay file is bounded to 4 MiB,
+serialized with a store-level file lease and atomic writes.
+
+Dataset scoring-item comments live per Task at
+`.peval/datasets/<dataset>/<task>/scoring_comments.json`, keyed inside each file
+by canonical scoring-item key (`[step, type, id]`). `<dataset>` is normalized to
+a lowercase path-safe identifier (replacing `/` and path-unsafe characters with
+`-`) from `dataset.toml` (`[dataset].id` for WorkBuddy, `[dataset].name` for
+Harbor manifests), falling back to the Dataset directory name when no
+`dataset.toml` exists. Users may edit `scoring_comments.json` directly using
+either `{"items": {...}}` (with optional `schema_version`) or a bare
+`{<item_key>: [...]}` mapping with minimal `{id, body}` entries. The store lock
+lives separately at `.peval/locks/scoring-comments.lock` (and
+`.peval/locks/source-comments.lock` for Trial review comments), keeping a
+constant lock footprint outside `.peval/datasets/`. Deleting a Task's last
+comment removes the file and any empty parent directories under
+`.peval/datasets/`. Because `<dataset>` is independent of the local absolute
+path, moving a Dataset or sharing `.peval/datasets/` across machines preserves
+its comments, and read-only WorkBuddy Datasets support scoring-item comments
+identically to native Harbor Datasets without affecting Task content digests.
+Renaming a Task moves its comment file to the new `<task>` directory under the
+comment store lease, rolling back the rename if the comment move fails. Archiving
+a Task to trash preserves its comments for restore; permanently deleting a Task,
+or purging a trashed Task when no active or other trashed Task shares that
+directory name, removes its scoring-comment overlay.
+Scoring-item comments are merged into Dataset inventories, Task detail, and
+flattened Task exports at read time.
+
+Trial scoring-result comments live in each source's existing workspace overlay as
+`review_comments.json` (`harbor/<mount>/<job>/<trial>/review_comments.json` for
+linked Harbor Trials, `<artifact_dir>/review_comments.json` for local sources),
+separately from `notes.md`. Users may edit `review_comments.json` directly using
+either `{"comments": [...]}` (with optional `schema_version`) or a top-level JSON
+array `[...]` with minimal `{id, body}` entries. They participate in source
+fingerprinting, catalog row projection (`review_comments`,
+`review_comment_count`, `review_comments_present`), catalog comment-status
+filtering and facets (`review_comments`: `commented` / `uncommented`),
+Leaderboard search, column presence, and Leaderboard exports. Administrators may
+edit or delete any comment; annotators may edit or delete only comments whose
+`author_id` matches their own non-admin `user_id`.
 
 ## Telemetry
 
@@ -435,7 +485,7 @@ Reprojection adds explanations without recalculating historical measurements.
 
 Provenance follows report `trajectory_meta`, catalog `row_json` and paginated
 Trial responses without new tables or numeric columns. Catalog schema is 23 and
-projection is 16. Manifest and evidence digests join source revision; values and
+projection is 17. Manifest and evidence digests join source revision; values and
 provenance commit in one generation. In-memory summary, presence and registry caches
 also include the persistent catalog instance identity, so rebuilding a database
 cannot reuse an older instance's generation number. Bounds are 2 KiB and four references per

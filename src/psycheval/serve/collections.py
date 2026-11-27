@@ -25,6 +25,11 @@ from psycheval.state.collections import (
     CollectionStore,
     directory_identity,
 )
+from psycheval.state.comments import (
+    ScoringCommentStore,
+    attach_task_scoring_comments,
+    resolve_dataset_comment_key,
+)
 from psycheval.state.jobs import managed_config
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -77,6 +82,21 @@ class WorkspaceCollections:
             projected = project_harbor_inventory({"datasets": [value]}, role)[
                 "datasets"
             ][0]
+            dataset_key = resolve_dataset_comment_key(
+                Path(dataset.path),
+                dataset_id=dataset.id,
+                dataset_format=dataset.format,
+            )
+            dataset_comments = ScoringCommentStore(self.workspace).read_dataset(
+                dataset_key
+            )
+            projected["tasks"] = [
+                attach_task_scoring_comments(
+                    task, dataset_comments.get(str(task.get("directory") or ""), {})
+                )
+                for task in projected.get("tasks", [])
+                if isinstance(task, dict)
+            ]
             overlay = self.store.read("dataset", Path(dataset.path))
             projected.update(
                 note=overlay["note"], collection_revision=overlay["revision"]

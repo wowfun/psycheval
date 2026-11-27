@@ -50,6 +50,7 @@ class CatalogQueryRequest(StrictRequest):
     jobs: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)
     datasets: list[str] = Field(default_factory=list)
+    review_comments: list[str] = Field(default_factory=list)
 
 
 class CatalogSummaryRequest(StrictRequest):
@@ -65,6 +66,7 @@ class CatalogSummaryRequest(StrictRequest):
     providers: list[str]
     datasets: list[str]
     results: list[str]
+    review_comments: list[str] = Field(default_factory=list)
     views: list[str]
     browser_views: list[dict[str, Any]]
     inline_views: list[dict[str, Any]] = Field(default_factory=list)

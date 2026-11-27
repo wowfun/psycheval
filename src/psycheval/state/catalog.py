@@ -49,6 +49,7 @@ from psycheval.state.catalog_queries import (
     search_document,
 )
 from psycheval.state.catalog_summaries import CatalogSummaryCapacityError
+from psycheval.state.comments import read_source_comments
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
     replace_evaluation_report_projection,
@@ -62,7 +63,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 23
-CATALOG_PROJECTION_VERSION = 16
+CATALOG_PROJECTION_VERSION = 17
 _ACTIVE_SCAN_PHASES = frozenset({"discovering", "checking", "committing"})
 SUMMARY_CACHE_ENTRY_LIMIT = 128
 SUMMARY_CACHE_BYTE_LIMIT = 16 * 1024 * 1024
@@ -1224,6 +1225,9 @@ class WorkspaceCatalog:
             trial_key=str(meta.get("trial_key") or ""),
         )
         notes_markdown = note["markdown"] if note else ""
+        review_comments = read_source_comments(
+            self.store.paths.root, document.source_ref
+        )
         if document.readable or document.meta is not None:
             summary = catalog_summary(
                 trajectory,
@@ -1262,6 +1266,9 @@ class WorkspaceCatalog:
             "input_bytes": document.input_bytes,
             "notes_markdown": notes_markdown,
             "notes_present": bool(notes_markdown.strip()),
+            "review_comments": review_comments,
+            "review_comment_count": len(review_comments),
+            "review_comments_present": bool(review_comments),
         }
         if document.source_ref.startswith("runs/"):
             row["artifact_dir"] = document.source_ref

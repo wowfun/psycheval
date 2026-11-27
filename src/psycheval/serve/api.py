@@ -488,6 +488,7 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     _register_harbor_routes(app)
     _register_acp_routes(app)
     from psycheval.serve.collections import register_collection_routes
+    from psycheval.serve.comments import register_comment_routes
     from psycheval.serve.jobs import register_jobs_routes
     from psycheval.serve.judge import register_judge_routes
     from psycheval.serve.task_tables import register_task_table_routes
@@ -495,6 +496,7 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
 
     register_jobs_routes(app)
     register_collection_routes(app)
+    register_comment_routes(app)
     register_verification_routes(app)
     register_judge_routes(app)
     register_task_table_routes(app)

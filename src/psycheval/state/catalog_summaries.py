@@ -34,6 +34,7 @@ def summary_query_scope(query: CatalogQuery) -> tuple[Any, ...]:
         tuple(sorted(query.jobs)),
         tuple(sorted(query.providers)),
         tuple(sorted(query.datasets)),
+        tuple(sorted(query.review_comments)),
         query.include_unreadable,
     )
 
