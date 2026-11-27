@@ -11,7 +11,7 @@ from psycheval.metric_contract import SAVED_VIEW_METRIC_IDS, finite_number
 from psycheval.report.metrics import tool_success_rate
 
 if TYPE_CHECKING:
-    from psycheval.state.catalog import CatalogQuery
+    from psycheval.state.catalog_queries import CatalogQuery
 
 SUMMARY_GROUP_LIMIT = 1_000
 

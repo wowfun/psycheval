@@ -28,8 +28,8 @@ from psycheval.state.catalog import (
     CATALOG_PROJECTION_VERSION,
     CATALOG_SCHEMA_VERSION,
     CatalogSummaryCapacityError,
-    _count_matching_source_refs,
 )
+from psycheval.state.catalog_queries import count_matching_source_refs
 from psycheval.state.catalog_summaries import SUMMARY_GROUP_LIMIT
 from psycheval.state.workspace_source_models import SourceDocument
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
@@ -415,7 +415,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
         connection.set_trace_callback(statements.append)
 
         self.assertEqual(
-            _count_matching_source_refs(connection, "active = ?", [1], refs),
+            count_matching_source_refs(connection, "active = ?", [1], refs),
             len(refs),
         )
         selects = [
