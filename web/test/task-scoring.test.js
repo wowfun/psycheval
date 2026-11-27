@@ -122,3 +122,64 @@ test("large instructions stay out of row HTML until hover or keyboard focus", ()
   assert.ok(taskSearchText(rows[0]).includes("replacement needle"));
   root.remove();
 });
+
+test("custom columns render, invalidate search cache, and group in Task Summary", async () => {
+  const { discoverCustomColumns, encodeCustomColumnKey } = await import("../../src/psycheval/assets/web/modules/task-custom-columns.js");
+  const rows = [
+    row("alpha", { tags: [], rule_count: 2, rubric_count: 1, scoring_item_count: 3, custom_metadata: { qa_status: "OK", verified: true, 质检项: ["不漏", "不重"] } }),
+    row("beta", { tags: [], rule_count: 1, rubric_count: 0, scoring_item_count: 1, custom_metadata: { qa_status: "NOK", verified: false } }),
+  ];
+  const customCols = discoverCustomColumns(rows, [{ key: "qa_status", type: "enum", options: ["OK", "POK", "NOK"] }]);
+  const cols = taskColumns({ scoring: true, customColumns: customCols });
+  const root = document.createElement("div"); document.body.append(root);
+  renderTaskTable({ root, tableId: "custom-cols-test", allRows: rows, columns: cols, onActivate() {}, onChange() {} });
+  assert.equal(root.querySelector(`td[data-table-column-key="${encodeCustomColumnKey("qa_status")}"]`).textContent, "OK");
+  assert.equal(root.querySelector(`td[data-table-column-key="${encodeCustomColumnKey("verified")}"]`).textContent, "Yes");
+  assert.ok(taskSearchText(rows[0]).includes("不漏"));
+  rows[0].task.custom_metadata = { ...rows[0].task.custom_metadata, qa_status: "POK" };
+  assert.ok(taskSearchText(rows[0]).includes("pok"));
+
+  const qaGroup = encodeCustomColumnKey("qa_status");
+  assert.deepEqual(
+    taskSummary(rows, qaGroup).map(({ key, task_count, rule_count }) => ({ key, task_count, rule_count })),
+    [{ key: "POK", task_count: 1, rule_count: 2 }, { key: "NOK", task_count: 1, rule_count: 1 }],
+  );
+  const zhGroup = encodeCustomColumnKey("质检项");
+  assert.deepEqual(
+    taskSummary(rows, zhGroup).map(({ key, task_count }) => ({ key, task_count })),
+    [{ key: "不漏", task_count: 1 }, { key: "不重", task_count: 1 }, { key: null, task_count: 1 }],
+  );
+
+  const summaryRoot = document.createElement("section"); document.body.append(summaryRoot);
+  const state = { ...createTaskSummaryState(), groupBy: zhGroup, open: true };
+  renderTaskSummary(summaryRoot, rows, state, { customColumns: customCols, onChange() {}, onExport() {} });
+  assert.match(summaryRoot.textContent, /group counts may overlap/);
+  // Disappearing custom grouping falls back cleanly to dataset.
+  renderTaskSummary(summaryRoot, rows, state, { customColumns: [], onChange() {}, onExport() {} });
+  assert.equal(state.groupBy, "dataset");
+
+  // Number and high-cardinality text columns (>24 distinct values) are excluded from group-by buttons.
+  const manyRows = Array.from({ length: 26 }, (_, index) => row(`t${index}`, {
+    tags: [],
+    rule_count: 1,
+    rubric_count: 0,
+    scoring_item_count: 1,
+    custom_metadata: {
+      priority: index,
+      unique_note: `note-${index}`,
+      team: index % 2 === 0 ? "red" : "blue",
+      verified: index % 2 === 0,
+    },
+  }));
+  const manyCustomCols = discoverCustomColumns(manyRows, []);
+  const filterState = createTaskSummaryState();
+  renderTaskSummary(summaryRoot, manyRows, filterState, { customColumns: manyCustomCols, onChange() {}, onExport() {} });
+  const groupKeys = [...summaryRoot.querySelectorAll("[data-task-summary-group]")].map(button => button.dataset.taskSummaryGroup);
+  assert.ok(groupKeys.includes(encodeCustomColumnKey("team")));
+  assert.ok(groupKeys.includes(encodeCustomColumnKey("verified")));
+  assert.ok(!groupKeys.includes(encodeCustomColumnKey("priority")));
+  assert.ok(!groupKeys.includes(encodeCustomColumnKey("unique_note")));
+
+  root.remove();
+  summaryRoot.remove();
+});

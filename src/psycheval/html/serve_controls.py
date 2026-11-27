@@ -355,6 +355,7 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
         admin_task_view = f'<label class="toolbar-menu-check"><input type="checkbox" data-harbor-show-trash disabled><span>{escape(messages["show_archived"])}</span></label>'
         admin_task_actions = f"""<details class="toolbar-menu toolbar-actions-menu"><summary class="action-button">{escape(messages["actions"])}</summary><div class="toolbar-menu-panel">
         <button type="button" data-harbor-create-task disabled>{escape(messages["harbor_create_task"])}</button>
+        <button type="button" data-harbor-add-column disabled>{escape(messages["task_custom_column_new"])}</button>
         <button type="button" data-harbor-sync-manifest disabled>{escape(messages["harbor_sync_manifest"])}</button>
         <button type="button" data-harbor-state-selected disabled>{escape(messages["archive_selected"])}</button>
         <hr><button class="danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button></div></details>"""
@@ -384,6 +385,7 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
             "EDITOR": escape(messages["harbor_editor"]),
             "TASK_ACTIONS": f"""
       <div class="harbor-workbench-tools">
+        <span data-task-columns-control></span>
         <details class="toolbar-menu toolbar-view-menu"><summary class="action-button">{escape(messages["view_options"])}</summary><div class="toolbar-menu-panel">{admin_task_view}<div data-task-view-options></div></div></details>
         {admin_task_actions}
       </div>""",

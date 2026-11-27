@@ -17,6 +17,7 @@ const browser = installBrowserDom(`
       <label><input type="checkbox" data-harbor-show-trash>Show archived</label>
       <p data-harbor-workbench-status hidden></p>
       <div class="harbor-overview-head"></div>
+      <span data-task-columns-control></span>
       <input data-harbor-search type="search">
       <span data-harbor-overview-count></span>
       <div data-harbor-overview></div>
@@ -1032,4 +1033,290 @@ test("a delayed Task detail read preserves the overview DOM and current scroll",
     assert.equal(document.querySelector("[data-harbor-overview] .table-wrap"), table);
     assert.equal(table.scrollTop, 240);
   } finally { globalThis.fetch = previous; }
+});
+
+test("Tasks custom columns support create, inline edit, 412 conflict retry, Columns control, and delete", async () => {
+  const { encodeCustomColumnKey } = await import("../../src/psycheval/assets/web/modules/task-custom-columns.js");
+  const previousFetch = globalThis.fetch;
+  const previousConfirm = window.confirm;
+  window.localStorage.clear();
+  harbor.workbenchState.customColumnSchemas = null;
+  harbor.workbenchState.taskColumns = { layout: null, draft: null, search: "" };
+  harbor.workbenchState.taskItemColumns = { layout: null, draft: null, search: "" };
+  harbor.workbenchState.showTrash = false;
+  harbor.workbenchState.flattened = false;
+  harbor.workbenchState.search = "";
+  harbor.workbenchState.datasetFilter = null;
+  harbor.workbenchState.taskSelection.clear();
+  harbor.workbenchState.busy = false;
+
+  const calls = [];
+  let rev = "task-r1";
+  let currentStatus = null;
+  let forceConflict = false;
+  const currentInventory = () => ({
+    generation: 1,
+    datasets: [
+      {
+        id: "pbench",
+        format: "harbor",
+        read_only: false,
+        revision: "ds-r1",
+        tasks: [{
+          ...task("valid-task", "valid", rev),
+          custom_metadata: currentStatus ? { qa_status: currentStatus } : {},
+        }],
+        trash: [],
+      },
+      {
+        id: "office",
+        format: "workbuddy.v1",
+        read_only: true,
+        revision: "ds-office",
+        tasks: [{
+          ...task("office-task", "registered", "off-r1"),
+          custom_metadata: { locked_note: "readonly" },
+        }],
+        trash: [],
+      },
+    ],
+  });
+
+  globalThis.fetch = async (path, options = {}) => {
+    const method = options.method || "GET";
+    const body = options.body ? JSON.parse(String(options.body)) : null;
+    calls.push({ path: String(path), method, body, ifMatch: options.headers?.["If-Match"] });
+    if (path === "/api/config") return new Response(JSON.stringify({ datasets: currentInventory().datasets, mounts: [] }), { headers: { ETag: '"cfg-1"' } });
+    if (path === "/api/collections/datasets") return new Response(JSON.stringify(currentInventory()));
+    if (String(path).endsWith("/tasks/valid-task/metadata") && method === "PATCH") {
+      if (forceConflict) {
+        forceConflict = false;
+        rev = "task-r2";
+        currentStatus = "POK";
+        return new Response(JSON.stringify({ detail: "resource changed; refresh before saving" }), { status: 412, headers: { ETag: '"task-r2"' } });
+      }
+      rev = "task-r3";
+      currentStatus = body.value;
+      return new Response(JSON.stringify({
+        id: "meta-op",
+        kind: "harbor-task-metadata",
+        state: "succeeded",
+        task: { ...task("valid-task", "valid", rev), custom_metadata: currentStatus ? { qa_status: currentStatus } : {} },
+      }), { status: 202, headers: { ETag: `"${rev}"` } });
+    }
+    if (path === "/api/harbor/task-metadata-operations" && method === "POST") {
+      if (body.value === null) currentStatus = null;
+      else if (body.key === "priority") {
+        // batch default creation
+      }
+      return new Response(JSON.stringify({ id: "batch-meta-op", kind: "harbor-task-metadata", state: "queued", completed: 0, total: body.items.length, successes: [], failures: [] }), { status: 202 });
+    }
+    if (String(path).startsWith("/api/operations/")) {
+      return new Response(JSON.stringify({ id: "op", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] }));
+    }
+    if (String(path).endsWith("/tasks/valid-task")) {
+      return new Response(JSON.stringify({ ...detail, task: { ...task("valid-task", "valid", rev), custom_metadata: currentStatus ? { qa_status: currentStatus } : {} } }));
+    }
+    return new Response(JSON.stringify({ path: "instruction.md", content: "Original", revision: "file-r1" }));
+  };
+
+  try {
+    harbor.workbenchState.inventory = currentInventory();
+    harbor.renderHarborWorkbench();
+
+    // Create enum column "qa_status" with options via modal (blank default -> no batch request).
+    const modal = await harbor.openCreateCustomColumn();
+    modal.querySelector('input[name="key"]').value = "qa_status";
+    const typeSelect = modal.querySelector('select[name="type"]');
+    typeSelect.value = "enum";
+    typeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+    modal.querySelector('textarea[name="options"]').value = "OK\nPOK\nNOK";
+    modal.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+
+    const qaColKey = encodeCustomColumnKey("qa_status");
+    assert.ok(document.querySelector(`th[data-table-column="${qaColKey}"]`));
+    assert.equal(calls.filter(call => call.path === "/api/harbor/task-metadata-operations").length, 0);
+
+    // WorkBuddy cell is read-only; native cell is editable with enum dropdown.
+    const rows = [...document.querySelectorAll("[data-harbor-overview] tbody tr")];
+    const nativeCell = rows[0].querySelector(`td[data-table-column-key="${qaColKey}"]`);
+    const officeCell = rows[1].querySelector(`td[data-table-column-key="${qaColKey}"]`);
+    officeCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    assert.equal(officeCell.querySelector(".table-cell-editor-control"), null);
+
+    // Trigger 412 conflict first, confirm draft & preview stay open, then retry successfully.
+    forceConflict = true;
+    nativeCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const select = nativeCell.querySelector("select.table-cell-editor-control");
+    assert.ok(select);
+    select.value = "NOK";
+    select.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick(); await tick();
+    assert.match(nativeCell.querySelector(".table-cell-editor-status").textContent, /resource changed/);
+    assert.match(nativeCell.querySelector(".table-cell-editor-status pre").textContent, /POK/);
+    assert.equal(select.value, "NOK");
+
+    select.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick(); await tick();
+    const patchCalls = calls.filter(call => call.method === "PATCH" && call.path.endsWith("/metadata"));
+    assert.equal(patchCalls.length, 2);
+    assert.equal(patchCalls[0].ifMatch, '"task-r1"');
+    assert.equal(patchCalls[1].ifMatch, '"task-r2"');
+    assert.deepEqual(patchCalls[1].body, { key: "qa_status", value: "NOK" });
+
+    // Create a number column with default value -> batch POST only targets editable task.
+    const batchModal = await harbor.openCreateCustomColumn();
+    batchModal.querySelector('input[name="key"]').value = "priority";
+    const batchType = batchModal.querySelector('select[name="type"]');
+    batchType.value = "number";
+    batchType.dispatchEvent(new window.Event("change", { bubbles: true }));
+    const defInput = batchModal.querySelector('input[name="default_value"]');
+    defInput.value = "1";
+    defInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.match(batchModal.querySelector("[data-custom-readonly-hint]").textContent, /1 read-only/);
+    batchModal.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick(); await tick();
+    const batchCall = calls.find(call => call.path === "/api/harbor/task-metadata-operations" && call.body.key === "priority");
+    assert.ok(batchCall);
+    assert.equal(batchCall.body.value, 1);
+    assert.equal(batchCall.body.overwrite, false);
+    assert.deepEqual(batchCall.body.items, [{ dataset_id: "pbench", task: "valid-task", etag: '"task-r3"' }]);
+
+    // Delete qa_status -> confirms and batch-deletes only writable task.
+    window.confirm = () => true;
+    const qaCol = harbor.activeCustomColumns().find(col => col.rawKey === "qa_status");
+    await harbor.deleteCustomColumn(qaCol);
+    await tick(); await tick();
+    const deleteCall = calls.find(call => call.path === "/api/harbor/task-metadata-operations" && call.body.key === "qa_status" && call.body.value === null);
+    assert.ok(deleteCall);
+    assert.equal(deleteCall.body.overwrite, true);
+    assert.deepEqual(deleteCall.body.items, [{ dataset_id: "pbench", task: "valid-task", etag: '"task-r3"' }]);
+  } finally {
+    window.confirm = previousConfirm;
+    globalThis.fetch = previousFetch;
+    window.localStorage.clear();
+    harbor.workbenchState.customColumnSchemas = null;
+    harbor.workbenchState.taskColumns = { layout: null, draft: null, search: "" };
+    harbor.workbenchState.taskItemColumns = { layout: null, draft: null, search: "" };
+    harbor.workbenchState.busy = false;
+  }
+});
+
+test("unchanged Dropdown and Boolean edits preserve mismatched TOML values without sending PATCH", async () => {
+  const { encodeCustomColumnKey, saveCustomColumnSchemas } = await import("../../src/psycheval/assets/web/modules/task-custom-columns.js");
+  const previousFetch = globalThis.fetch;
+  const patches = [];
+  globalThis.fetch = async (path, options = {}) => {
+    if (options.method === "PATCH") {
+      patches.push({ path: String(path), body: JSON.parse(String(options.body)) });
+      return new Response(JSON.stringify({
+        id: "meta-op",
+        task: { ...task("valid-task", "valid", "task-r2"), custom_metadata: { priority: JSON.parse(String(options.body)).value, flag: "yes", legacy: "Legacy" } },
+      }), { status: 202 });
+    }
+    if (String(path).startsWith("/api/operations/")) {
+      return new Response(JSON.stringify({ id: "meta-op", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] }));
+    }
+    return new Response(JSON.stringify({}));
+  };
+  try {
+    window.localStorage.clear();
+    saveCustomColumnSchemas([
+      { key: "priority", type: "enum", options: ["1", "2"] },
+      { key: "legacy", type: "enum", options: ["OK", "NOK"] },
+      { key: "flag", type: "boolean", options: [] },
+    ], { workspaceId: undefined, storage: window.localStorage });
+    harbor.workbenchState.customColumnSchemas = null;
+    harbor.workbenchState.taskColumns = { layout: null, draft: null, search: "" };
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.flattened = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.datasetFilter = null;
+    harbor.workbenchState.busy = false;
+    harbor.workbenchState.inventory = {
+      generation: 1,
+      datasets: [{
+        id: "pbench",
+        format: "harbor",
+        read_only: false,
+        revision: "ds-r1",
+        tasks: [{
+          ...task("valid-task", "valid", "task-r1"),
+          custom_metadata: { priority: 1, legacy: "Legacy", flag: "yes" },
+        }],
+        trash: [],
+      }],
+    };
+    harbor.renderHarborWorkbench();
+
+    for (const [key, expectedLabel] of [["priority", "1"], ["legacy", "Legacy"], ["flag", "yes"]]) {
+      const colKey = encodeCustomColumnKey(key);
+      const cell = document.querySelector(`[data-harbor-overview] tbody td[data-table-column-key="${colKey}"]`);
+      assert.equal(cell.textContent, expectedLabel);
+      cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+      const select = cell.querySelector("select.table-cell-editor-control");
+      assert.ok(select);
+      assert.equal(select.options[select.selectedIndex].textContent, expectedLabel);
+      select.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await tick();
+      assert.equal(patches.length, 0, `unchanged edit on ${key} must not send PATCH`);
+    }
+
+    // Explicitly changing priority from numeric 1 to option "2" DOES send PATCH.
+    const prioCell = document.querySelector(`[data-harbor-overview] tbody td[data-table-column-key="${encodeCustomColumnKey("priority")}"]`);
+    prioCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const select = prioCell.querySelector("select.table-cell-editor-control");
+    select.value = "2";
+    select.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick(); await tick();
+    assert.deepEqual(patches, [{ path: "/api/harbor/datasets/pbench/tasks/valid-task/metadata", body: { key: "priority", value: "2" } }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.localStorage.clear();
+    harbor.workbenchState.customColumnSchemas = null;
+    harbor.workbenchState.taskColumns = { layout: null, draft: null, search: "" };
+  }
+});
+
+test("closing an open filter menu flushes deferred background inventory updates", async () => {
+  const previousFetch = globalThis.fetch;
+  let currentTasks = [task("alpha-task", "valid", "r1")];
+  globalThis.fetch = async path => {
+    if (path === "/api/collections/datasets") {
+      return new Response(JSON.stringify({
+        generation: 2,
+        datasets: [{ id: "pbench", format: "harbor", read_only: false, revision: "ds-r1", tasks: currentTasks, trash: [] }],
+      }));
+    }
+    return new Response(JSON.stringify({}));
+  };
+  try {
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.flattened = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.datasetFilter = null;
+    harbor.workbenchState.inventory = {
+      generation: 1,
+      datasets: [{ id: "pbench", format: "harbor", read_only: false, revision: "ds-r1", tasks: currentTasks, trash: [] }],
+    };
+    harbor.renderHarborWorkbench();
+    const filterMenu = document.querySelector('[data-harbor-overview] details[data-filter-menu]');
+    assert.ok(filterMenu);
+    filterMenu.open = true;
+
+    // Background refresh arrives while filter menu is open -> table keeps menu mounted.
+    currentTasks = [task("alpha-task", "valid", "r1"), task("beta-task", "valid", "r2")];
+    await harbor.refreshHarborInventory({ quiet: true, skipGuard: true, skipTaskReload: true });
+    assert.equal(filterMenu.isConnected, true);
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 1);
+
+    // Closing the menu triggers the deferred render automatically.
+    filterMenu.open = false;
+    filterMenu.dispatchEvent(new window.Event("toggle"));
+    await tick();
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });

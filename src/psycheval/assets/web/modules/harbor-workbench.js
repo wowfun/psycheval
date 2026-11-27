@@ -1,27 +1,46 @@
 import { createColumnControl } from "./column-control.js";
-import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveColumns } from "./table-columns.js";
+import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./table-columns.js";
 import { bindToolbarMenus } from "./toolbar-menu.js";
 import { noteColumn, reportsColumn, createCollectionSidebar } from "./collection-ui.js";
 import { createRegistryManager } from "./registry-manager.js";
 import { taskColumns, taskRowIdentity, taskSearchText, renderTaskTable, flattenTaskRows } from "./task-table.js";
+import {
+  discoverCustomColumns,
+  encodeCustomColumnKey,
+  formatCustomColumnValue,
+  isCustomColumnKey,
+  loadCustomColumnSchemas,
+  openCustomColumnModal,
+  parseCustomColumnInput,
+  saveCustomColumnSchemas,
+} from "./task-custom-columns.js";
 import { createTaskSummaryState, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns, uniqueTasks } from "./task-summary.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
 import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
-import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
+import { RENDER_OPTIONS, adminMode, browserStorage, esc, formatMessage, listValue, t } from "./shared.js";
 import { applyDataTableControls, applyDataTableFilters, sortDataTableRows, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
 import { serveApi, serveEtag } from "./http.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 
 const HARBOR_TABLE_ID = "harbor-datasets";
+const UNCHANGED_METADATA_SENTINEL = "\u0001peval-unchanged";
+const OVERVIEW_OVERLAY_SELECTOR = "[data-harbor-overview] [data-table-cell-editor], [data-harbor-overview] details[open], [data-task-columns-control] details[open]";
 const trackedWorkbenchOperations = new Set();
+const watchedDeferredOverlays = new WeakSet();
 let workbenchMutationBusy = false;
+let pendingInventoryRender = false;
+let customColumnsCache = { inventory: null, schemas: null, version: -1, value: [] };
 let taskBrowser = null;
 let taskSidebar = null, registryManager = null;
 
 const workbenchState = {
   inventory: null,
   datasetColumns: { layout: null, draft: null, search: "" },
+  taskColumns: { layout: null, draft: null, search: "" },
+  taskItemColumns: { layout: null, draft: null, search: "" },
+  customColumnSchemas: null,
+  customMetadataVersion: 0,
   datasetId: null,
   datasetFilter: null,
   taskName: null,
@@ -37,6 +56,7 @@ const workbenchState = {
   flattened: false,
   summary: createTaskSummaryState(),
   displayRows: [],
+  visibleColumns: [],
 };
 
 function taskDetailRoot() {
@@ -71,8 +91,7 @@ function renderDatasetRegistry(force = false) {
   const searched = datasets.filter(row => !workbenchState.registrySearch || `${row.id} ${row.note || ""}`.toLowerCase().includes(workbenchState.registrySearch.toLowerCase()));
   const rows = applyDataTableControls("harbor-dataset-registry", searched, allColumns, datasets);
   const businessColumns = allColumns.filter(column => !column.select);
-  let storage; try { storage = window.localStorage; } catch { storage = null; }
-  const options = { workspaceId: RENDER_OPTIONS?.workspace_id, tableId: "datasets", storage };
+  const options = { workspaceId: RENDER_OPTIONS?.workspace_id, tableId: "datasets", storage: browserStorage() };
   const columnState = workbenchState.datasetColumns;
   columnState.layout ||= loadColumnLayout(businessColumns.map(column => column.key), options);
   const layout = normalizeColumnLayout(businessColumns.map(column => column.key), columnState.layout);
@@ -167,14 +186,6 @@ function confirmDiscard() {
   return !isHarborDirty() || window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"));
 }
 
-function harborMessage(key, fallback, values = {}) {
-  let message = String(t(key, fallback));
-  Object.entries(values).forEach(([name, value]) => {
-    message = message.replaceAll(`{${name}}`, String(value));
-  });
-  return message;
-}
-
 function overviewRowKey(row) {
   if (row.kind === "trash") return `dataset:${row.dataset.id}|trash:${row.entry.entry_id}`;
   return `dataset:${row.dataset.id}|task:${row.task?.directory || ""}`;
@@ -209,12 +220,380 @@ function rowDiagnostics(row) {
   return listValue(row.task?.diagnostics).filter(Boolean).join(" · ");
 }
 
+function customSchemaStorageOptions() {
+  return { workspaceId: RENDER_OPTIONS?.workspace_id, storage: browserStorage() };
+}
+
+function customColumnSchemas() {
+  if (!workbenchState.customColumnSchemas) {
+    workbenchState.customColumnSchemas = loadCustomColumnSchemas(customSchemaStorageOptions());
+  }
+  return workbenchState.customColumnSchemas;
+}
+
+function setCustomColumnSchemas(next) {
+  workbenchState.customColumnSchemas = next;
+  saveCustomColumnSchemas(next, customSchemaStorageOptions());
+}
+
+function allInventoryTaskRows() {
+  return listValue(workbenchState.inventory?.datasets).flatMap(dataset =>
+    listValue(dataset?.tasks).map(task => ({
+      kind: "task",
+      dataset,
+      task,
+      entry: null,
+      key: `dataset:${dataset.id}|task:${task?.directory || ""}`,
+      datasetId: dataset.id,
+      taskName: task?.directory || "",
+    })),
+  );
+}
+
+function hasWritableDataset() {
+  return listValue(workbenchState.inventory?.datasets).some(dataset => !datasetIsReadOnly(dataset));
+}
+
+function activeCustomColumns() {
+  const inventory = workbenchState.inventory;
+  const schemas = customColumnSchemas();
+  const version = workbenchState.customMetadataVersion;
+  if (
+    customColumnsCache.inventory === inventory
+    && customColumnsCache.schemas === schemas
+    && customColumnsCache.version === version
+  ) {
+    return customColumnsCache.value;
+  }
+  const value = discoverCustomColumns(allInventoryTaskRows(), schemas);
+  customColumnsCache = { inventory, schemas, version, value };
+  return value;
+}
+
+function taskColumnOptions(flattened = workbenchState.flattened) {
+  return {
+    workspaceId: RENDER_OPTIONS?.workspace_id,
+    tableId: flattened ? "task-items" : "tasks",
+    storage: browserStorage(),
+    retainUnknown: isCustomColumnKey,
+  };
+}
+
+function ensureColumnVisibleInLayouts(columnKey) {
+  for (const flattened of [false, true]) {
+    const state = flattened ? workbenchState.taskItemColumns : workbenchState.taskColumns;
+    const options = taskColumnOptions(flattened);
+    const current = state.layout || loadColumnLayout([columnKey], options);
+    const next = {
+      ...current,
+      order: current.order.includes(columnKey) ? [...current.order] : [...current.order, columnKey],
+      visibility: { ...(current.visibility || {}), [columnKey]: "show" },
+    };
+    state.layout = next;
+    saveColumnLayout(next, options);
+  }
+}
+
+function removeColumnFromLayouts(columnKey) {
+  for (const flattened of [false, true]) {
+    const state = flattened ? workbenchState.taskItemColumns : workbenchState.taskColumns;
+    const options = taskColumnOptions(flattened);
+    const current = state.layout || loadColumnLayout([], options);
+    const visibility = { ...(current.visibility || {}) };
+    delete visibility[columnKey];
+    const next = {
+      ...current,
+      order: (current.order || []).filter(key => key !== columnKey),
+      visibility,
+    };
+    state.layout = next;
+    saveColumnLayout(next, options);
+  }
+}
+
+function customColumnSuggestions(col) {
+  const values = [];
+  const seen = new Set();
+  for (const row of allInventoryTaskRows()) {
+    const raw = row.task?.custom_metadata?.[col.rawKey];
+    const items = col.type === "list"
+      ? (Array.isArray(raw) ? raw : [])
+      : (typeof raw === "string" ? [raw] : []);
+    for (const item of items) {
+      const text = String(item ?? "").trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      values.push(text);
+    }
+  }
+  return values;
+}
+
+function updateInventoryTask(datasetId, taskName, updatedTask) {
+  const current = datasetForId(datasetId)?.tasks?.find(task => task.directory === taskName);
+  if (current) Object.assign(current, updatedTask);
+  if (workbenchState.taskDetail?.task && workbenchState.datasetId === datasetId && workbenchState.taskName === taskName) {
+    Object.assign(workbenchState.taskDetail.task, updatedTask);
+  }
+  workbenchState.customMetadataVersion += 1;
+}
+
+function sameCustomValue(left, right) {
+  const a = left === undefined ? null : left;
+  const b = right === undefined ? null : right;
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => item === b[index]);
+  }
+  return false;
+}
+
+async function commitTaskMetadataCell(row, col, rawInput) {
+  if (!adminMode() || row?.kind !== "task" || datasetIsReadOnly(row.dataset)) {
+    throw new Error(t("harbor_dataset_read_only", "Dataset is read-only"));
+  }
+  if (rawInput === UNCHANGED_METADATA_SENTINEL) return;
+  const parsed = parseCustomColumnInput(col.type, rawInput, col.options);
+  if (sameCustomValue(row.task?.custom_metadata?.[col.rawKey], parsed)) return;
+  const path = `/api/harbor/datasets/${encodeURIComponent(row.datasetId)}/tasks/${encodeURIComponent(row.taskName)}/metadata`;
+  try {
+    const saved = await serveApi(path, {
+      method: "PATCH",
+      body: { key: col.rawKey, value: parsed },
+      ifMatch: row.task.revision,
+    });
+    if (saved?.task) {
+      Object.assign(row.task, saved.task);
+      updateInventoryTask(row.datasetId, row.taskName, saved.task);
+    }
+    const viewingCleanToml = row.datasetId === workbenchState.datasetId
+      && row.taskName === workbenchState.taskName
+      && workbenchTaskBrowser()?.currentFile()?.path === "task.toml"
+      && !isHarborDirty();
+    if (viewingCleanToml) {
+      void workbenchTaskBrowser()?.openPath("task.toml", { focus: false });
+    }
+    if (saved?.id) {
+      // The cell updates the shared task projection immediately from saved.task;
+      // avoid a post-reconcile full table re-render that could interrupt a follow-up click or editor.
+      const feedback = taskFeedback("task", row.taskName, `metadata:${col.rawKey}`);
+      void watchOperation(saved.id, {
+        feedback,
+        committed: true,
+      });
+    }
+  } catch (error) {
+    if (error.status === 412) {
+      try {
+        const fresh = await serveApi(`/api/harbor/datasets/${encodeURIComponent(row.datasetId)}/tasks/${encodeURIComponent(row.taskName)}`);
+        if (fresh?.task) {
+          row.task.revision = fresh.task.revision;
+          updateInventoryTask(row.datasetId, row.taskName, { revision: fresh.task.revision });
+          const currentValue = formatCustomColumnValue(fresh.task.custom_metadata?.[col.rawKey], col.type)
+            || t("task_custom_unset", "Unset");
+          error.savedContent = savedContentPreview(col.label, currentValue);
+        }
+      } catch (refreshError) {
+        error.message += ` (${refreshError.message})`;
+      }
+    }
+    throw error;
+  }
+}
+
+async function openCreateCustomColumn(opener = document.activeElement) {
+  if (!adminMode() || workbenchState.showTrash || workbenchState.busy || !hasWritableDataset()) return null;
+  const visibleTasks = uniqueTasks(visibleOverviewRows());
+  const visibleEditable = visibleTasks.filter(row => !datasetIsReadOnly(row.dataset));
+  const visibleReadOnlyCount = visibleTasks.length - visibleEditable.length;
+  const selectedEditable = selectedTaskRows().filter(row => row.kind === "task");
+  const existingKeys = new Set(activeCustomColumns().map(col => col.rawKey));
+  return openCustomColumnModal({
+    mode: "create",
+    existingKeys,
+    selectedEditableCount: selectedEditable.length,
+    visibleEditableCount: visibleEditable.length,
+    selectedReadOnlyCount: 0,
+    visibleReadOnlyCount,
+    opener,
+    async onSubmit({ key, type, options, defaultValue, scope }) {
+      const schemas = [...customColumnSchemas().filter(item => item.key !== key), { key, type, options }];
+      const columnKey = encodeCustomColumnKey(key);
+      if (defaultValue !== null) {
+        const targets = scope === "selected" && selectedEditable.length ? selectedEditable : visibleEditable;
+        setWorkbenchBusy(true);
+        try {
+          const operation = await serveApi("/api/harbor/task-metadata-operations", {
+            method: "POST",
+            body: {
+              key,
+              value: defaultValue,
+              overwrite: false,
+              items: targets.map(row => ({
+                dataset_id: row.datasetId,
+                task: row.taskName,
+                etag: `"${row.task.revision}"`,
+              })),
+            },
+          });
+          setCustomColumnSchemas(schemas);
+          ensureColumnVisibleInLayouts(columnKey);
+          renderHarborWorkbench();
+          trackOperation(operation, {
+            feedback: taskFeedback("task", key, "custom-column-create"),
+          });
+        } finally {
+          setWorkbenchBusy(false);
+        }
+        return true;
+      }
+      setCustomColumnSchemas(schemas);
+      ensureColumnVisibleInLayouts(columnKey);
+      renderHarborWorkbench();
+      return true;
+    },
+  });
+}
+
+async function openEditCustomColumn(custom, opener = document.activeElement) {
+  if (!adminMode() || !custom || workbenchState.busy) return null;
+  return openCustomColumnModal({
+    mode: "edit",
+    column: custom,
+    opener,
+    async onSubmit({ key, type, options }) {
+      const existing = customColumnSchemas();
+      const index = existing.findIndex(item => item.key === key);
+      const next = [...existing];
+      if (index >= 0) next[index] = { key, type, options };
+      else next.push({ key, type, options });
+      setCustomColumnSchemas(next);
+      renderHarborWorkbench();
+      return true;
+    },
+  });
+}
+
+async function deleteCustomColumn(custom) {
+  if (!adminMode() || !custom || workbenchState.busy) return false;
+  const allTasks = allInventoryTaskRows().filter(
+    row => row.task?.custom_metadata && Object.prototype.hasOwnProperty.call(row.task.custom_metadata, custom.rawKey),
+  );
+  const writable = allTasks.filter(row => !datasetIsReadOnly(row.dataset));
+  const readOnlyCount = allTasks.length - writable.length;
+  if (!writable.length && !custom.defined) return false;
+  if (writable.length > 0) {
+    const promptText = [
+      formatMessage("task_custom_delete_confirm", "Remove custom column “{key}” from {count} editable Task(s)’ task.toml files?", {
+        key: custom.rawKey,
+        count: writable.length,
+      }),
+      readOnlyCount > 0
+        ? formatMessage("task_custom_delete_readonly_note", "{count} read-only Task(s) keep their original task.toml values.", { count: readOnlyCount })
+        : "",
+    ].filter(Boolean).join("\n");
+    if (!window.confirm(promptText)) return false;
+    const feedback = taskFeedback("task", custom.rawKey, "custom-column-delete");
+    setWorkbenchBusy(true);
+    try {
+      const operation = await serveApi("/api/harbor/task-metadata-operations", {
+        method: "POST",
+        body: {
+          key: custom.rawKey,
+          value: null,
+          overwrite: true,
+          items: writable.map(row => ({
+            dataset_id: row.datasetId,
+            task: row.taskName,
+            etag: `"${row.task.revision}"`,
+          })),
+        },
+      });
+      setCustomColumnSchemas(customColumnSchemas().filter(item => item.key !== custom.rawKey));
+      removeColumnFromLayouts(custom.key);
+      renderHarborWorkbench();
+      trackOperation(operation, { feedback });
+      return true;
+    } catch (error) {
+      feedback.error(error);
+      return false;
+    } finally {
+      setWorkbenchBusy(false);
+    }
+  }
+  setCustomColumnSchemas(customColumnSchemas().filter(item => item.key !== custom.rawKey));
+  removeColumnFromLayouts(custom.key);
+  renderHarborWorkbench();
+  return true;
+}
+
 function harborColumns() {
   const canEditRuleCount = row => adminMode() && registryManager?.ready && row.kind === "task" && row.dataset.format === "workbuddy.v1";
+  const canEditCustomMetadata = (row, col) => adminMode() && row.kind === "task" && !datasetIsReadOnly(row.dataset) && col.type !== "readonly";
   return taskColumns({
     scoring: !workbenchState.showTrash,
     flattened: workbenchState.flattened,
     canEditRuleCount,
+    customColumns: workbenchState.showTrash ? [] : activeCustomColumns(),
+    canEditCustomMetadata,
+    customColumnSuggestions,
+    editCustomMetadata: (row, col, raw) => {
+      if (col.type === "enum") {
+        const options = [{ value: "", label: t("task_custom_unset", "Unset") }];
+        if (raw == null) {
+          for (const option of col.options) options.push({ value: option, label: option });
+          return { value: "", options, commit: (_r, value) => commitTaskMetadataCell(row, col, value) };
+        }
+        if (typeof raw === "string" && col.options.includes(raw)) {
+          for (const option of col.options) options.push({ value: option, label: option });
+          return { value: raw, options, commit: (_r, value) => commitTaskMetadataCell(row, col, value) };
+        }
+        const label = formatCustomColumnValue(raw, "text") || String(raw);
+        let matched = false;
+        for (const option of col.options) {
+          if (!matched && option === label) {
+            matched = true;
+            options.push({ value: UNCHANGED_METADATA_SENTINEL, label: option });
+          } else {
+            options.push({ value: option, label: option });
+          }
+        }
+        if (!matched) options.splice(1, 0, { value: UNCHANGED_METADATA_SENTINEL, label });
+        return { value: UNCHANGED_METADATA_SENTINEL, options, commit: (_r, value) => commitTaskMetadataCell(row, col, value) };
+      }
+      if (col.type === "boolean") {
+        const options = [
+          { value: "", label: t("task_custom_unset", "Unset") },
+          { value: "true", label: t("yes", "Yes") },
+          { value: "false", label: t("no", "No") },
+        ];
+        if (raw == null || typeof raw === "boolean") {
+          const current = typeof raw === "boolean" ? String(raw) : "";
+          return { value: current, options, commit: (_r, value) => commitTaskMetadataCell(row, col, value) };
+        }
+        const label = formatCustomColumnValue(raw, "text") || String(raw);
+        options.splice(1, 0, { value: UNCHANGED_METADATA_SENTINEL, label });
+        return { value: UNCHANGED_METADATA_SENTINEL, options, commit: (_r, value) => commitTaskMetadataCell(row, col, value) };
+      }
+      if (col.type === "list") {
+        return {
+          value: Array.isArray(raw) ? raw : raw != null ? [String(raw)] : [],
+          suggestions: () => customColumnSuggestions(col),
+          commit: (_r, value) => commitTaskMetadataCell(row, col, value),
+        };
+      }
+      if (col.type === "number") {
+        return {
+          value: raw ?? "",
+          commit: (_r, value) => commitTaskMetadataCell(row, col, value),
+        };
+      }
+      return {
+        value: raw ?? "",
+        suggestions: () => customColumnSuggestions(col),
+        commit: (_r, value) => commitTaskMetadataCell(row, col, value),
+      };
+    },
     editRuleCount: row => {
       if (!canEditRuleCount(row)) return null;
       const writeCount = registryManager.taskRuleCountWriter(row.datasetId, row.taskName);
@@ -237,6 +616,20 @@ function harborColumns() {
       value: rowTaskName(row), commit: (_current, value) => renameOverviewTask(row, value),
     } : null,
   });
+}
+
+function resolveTaskTableColumns(allColumns, filteredRows) {
+  if (workbenchState.showTrash) {
+    return { columns: allColumns, businessColumns: allColumns.filter(col => !col.select), layout: null, presence: null, columnState: null, options: null };
+  }
+  const businessColumns = allColumns.filter(col => !col.select);
+  const columnState = workbenchState.flattened ? workbenchState.taskItemColumns : workbenchState.taskColumns;
+  const options = taskColumnOptions(workbenchState.flattened);
+  columnState.layout ||= loadColumnLayout(businessColumns.map(col => col.key), options);
+  const layout = normalizeColumnLayout(businessColumns.map(col => col.key), columnState.layout, options);
+  const presence = presenceForColumns(businessColumns, filteredRows);
+  const columns = [...allColumns.filter(col => col.select), ...resolveColumns(businessColumns, layout, presence)];
+  return { columns, businessColumns, layout, presence, columnState, options };
 }
 
 function visibleOverviewRows(rows = overviewRows(), columns = harborColumns()) {
@@ -283,6 +676,67 @@ function reconcileOverviewSelection(rows) {
   return { row, changed: true };
 }
 
+function renderTaskColumnControl(surface, resolved) {
+  const host = surface.querySelector("[data-task-columns-control]");
+  if (!host) return;
+  host.hidden = workbenchState.showTrash || !resolved.layout;
+  if (host.hidden) {
+    host.replaceChildren();
+    return;
+  }
+  const writable = hasWritableDataset();
+  const control = createColumnControl({
+    id: workbenchState.flattened ? "task-items" : "tasks",
+    state: resolved.columnState,
+    options: resolved.options,
+    context: () => ({
+      columns: resolved.businessColumns,
+      layout: resolved.layout,
+      presence: resolved.presence,
+    }),
+    conditionText: column => {
+      const controls = tableControls(HARBOR_TABLE_ID);
+      return [
+        controls.sort === column.key ? controls.direction : "",
+        controls.filters?.[column.key]?.length ? t("filtered", "Filtered") : "",
+      ].filter(Boolean).join(" · ");
+    },
+    headerAction: adminMode() ? {
+      label: `+ ${t("task_custom_column_new", "New custom column")}`,
+      disabled: workbenchState.busy || !writable,
+      onClick: opener => openCreateCustomColumn(opener),
+    } : null,
+    rowActions: adminMode() ? column => {
+      if (!isCustomColumnKey(column.key)) return [];
+      const custom = column.customColumn;
+      const canDelete = Boolean(custom && (custom.defined || custom.hasWritableData));
+      return [
+        {
+          key: "edit",
+          label: t("edit", "Edit"),
+          title: t("task_custom_column_edit", "Edit custom column"),
+          disabled: workbenchState.busy,
+          onClick: (_col, opener) => openEditCustomColumn(custom, opener),
+        },
+        {
+          key: "delete",
+          label: t("delete", "Delete"),
+          title: t("task_custom_column_delete", "Delete column"),
+          danger: true,
+          disabled: workbenchState.busy || !canDelete,
+          onClick: () => deleteCustomColumn(custom),
+        },
+      ];
+    } : null,
+    onRender: () => {
+      renderHarborWorkbench();
+      return surface.querySelector("[data-task-columns-control]");
+    },
+  });
+  host.innerHTML = control.render();
+  control.bind(host);
+}
+
 function renderHarborOverview(surface, { allRows, columns, rows }) {
   const container = surface.querySelector("[data-harbor-overview]");
   if (!container) return;
@@ -294,8 +748,11 @@ function renderHarborOverview(surface, { allRows, columns, rows }) {
   }
   const flattened = workbenchState.flattened && !workbenchState.showTrash;
   const displayRows = flattened ? sortDataTableRows(HARBOR_TABLE_ID, rows, columns) : rows;
+  const resolved = resolveTaskTableColumns(columns, displayRows);
   workbenchState.displayRows = displayRows;
-  renderTaskTable({ root: container, tableId: HARBOR_TABLE_ID, allRows, columns, rows: displayRows,
+  workbenchState.visibleColumns = resolved.columns;
+  renderTaskColumnControl(surface, resolved);
+  renderTaskTable({ root: container, tableId: HARBOR_TABLE_ID, allRows, columns: resolved.columns, rows: displayRows,
     selectedKey: selectedOverviewKey(), rowAttribute: "data-harbor-overview-row",
     onActivate: (row, node, column) => selectOverviewRow(row, node, scoringPath(row, column)),
     onChange: () => refreshOverviewAfterControls(() => {
@@ -309,6 +766,7 @@ function renderHarborOverview(surface, { allRows, columns, rows }) {
 
 function scoringPath(row, column) {
   if (workbenchState.showTrash || row?.kind !== "task") return null;
+  if (isCustomColumnKey(column)) return "task.toml";
   const resources = { skill_count: "skills", input_file_count: "files", has_prepare: "prepare" };
   if (resources[column]) return { resource: resources[column] };
   if (row.scoringItem) return row.scoringItem.path;
@@ -349,6 +807,7 @@ function renderScoringControls(surface, rows) {
   }
   summary.hidden = workbenchState.showTrash;
   if (!summary.hidden) renderTaskSummary(summary, tasks, workbenchState.summary, {
+    customColumns: activeCustomColumns(),
     onChange: () => renderScoringControls(surface, rows),
     onExport: kind => downloadTaskTable(kind, true),
   });
@@ -359,17 +818,48 @@ async function downloadTaskTable(kind, summary = false) {
   const surface = workbenchRoot();
   const settings = workbenchState.summary;
   if (summary && settings.exporting) return;
+  if (!summary && !workbenchState.visibleColumns.length) return;
   const rows = summary ? uniqueTasks(visibleOverviewRows()) : workbenchState.displayRows;
   const feedback = beginFeedback(surface.querySelector(summary ? "[data-task-summary]" : "[data-task-scoring-actions]"), { page: "datasets", key: "datasets:export" });
   try {
     if (summary) { settings.exporting = true; renderScoringControls(surface, rows); }
-    if (summary && ["bar", "pie"].includes(kind)) await exportTaskSummaryImage(rows, settings, kind);
+    if (summary && ["bar", "pie"].includes(kind)) await exportTaskSummaryImage(rows, settings, kind, activeCustomColumns());
     else await exportTasks({ kind, mode: summary ? "summary" : workbenchState.flattened ? "items" : "tasks",
-      rows, columns: summary ? taskSummaryExportColumns(settings) : harborColumns(),
+      rows, columns: summary ? taskSummaryExportColumns(settings) : workbenchState.visibleColumns,
       groupBy: settings.groupBy, groups: summary ? settings.groups : null });
     feedback.success();
   } catch (error) { feedback.error(error); }
   finally { if (summary) { settings.exporting = false; renderScoringControls(surface, visibleOverviewRows()); } }
+}
+
+function flushDeferredInventoryRender() {
+  if (!pendingInventoryRender) return;
+  const surface = workbenchRoot();
+  if (!surface) {
+    pendingInventoryRender = false;
+    return;
+  }
+  if (surface.querySelector(OVERVIEW_OVERLAY_SELECTOR)) return;
+  pendingInventoryRender = false;
+  renderHarborWorkbench({ preserveEditors: true });
+}
+
+function scheduleDeferredInventoryRender(surface) {
+  pendingInventoryRender = true;
+  surface.querySelectorAll("[data-harbor-overview] details[open], [data-task-columns-control] details[open]").forEach(menu => {
+    if (watchedDeferredOverlays.has(menu)) return;
+    watchedDeferredOverlays.add(menu);
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) queueMicrotask(flushDeferredInventoryRender);
+    });
+  });
+  surface.querySelectorAll("[data-harbor-overview] [data-table-cell-editor]").forEach(editor => {
+    if (watchedDeferredOverlays.has(editor)) return;
+    watchedDeferredOverlays.add(editor);
+    editor.addEventListener("keydown", event => {
+      if (event.key === "Escape") queueMicrotask(flushDeferredInventoryRender);
+    });
+  });
 }
 
 function renderHarborWorkbench({ preserveEditors = false, table } = {}) {
@@ -383,9 +873,14 @@ function renderHarborWorkbench({ preserveEditors = false, table } = {}) {
   Array.from(workbenchState.taskSelection).forEach(key => {
     if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
   });
-  const editing = preserveEditors && surface.querySelector("[data-harbor-overview] [data-table-cell-editor]");
+  const editing = preserveEditors && Boolean(surface.querySelector(OVERVIEW_OVERLAY_SELECTOR));
   const selection = editing ? { row: rows.find(row => overviewRowKey(row) === selectedOverviewKey()), changed: false } : reconcileOverviewSelection(rows);
-  if (!editing) renderHarborOverview(surface, overview);
+  if (editing) {
+    scheduleDeferredInventoryRender(surface);
+  } else {
+    pendingInventoryRender = false;
+    renderHarborOverview(surface, overview);
+  }
   renderContextControls(surface);
   renderSelectedTaskHeading(taskDetailRoot());
   renderFileTree(taskDetailRoot());
@@ -408,6 +903,7 @@ function restoreTableControls() {
 function renderContextControls(surface) {
   const dataset = selectedDataset();
   setDisabled(surface, "[data-harbor-create-task]", workbenchState.busy || !dataset || datasetIsReadOnly(dataset) || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-add-column]", workbenchState.busy || workbenchState.showTrash || !hasWritableDataset());
   setDisabled(surface, "[data-harbor-sync-manifest]", workbenchState.busy || !dataset || datasetIsReadOnly(dataset) || workbenchState.showTrash);
   setDisabled(surface, "[data-harbor-state-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
   setDisabled(surface, "[data-harbor-delete-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
@@ -490,7 +986,7 @@ function renderDiagnostics(surface = taskDetailRoot()) {
   if (!container) return;
   container.replaceChildren();
   const task = workbenchState.taskDetail?.task || selectedTask();
-  [...listValue(task?.diagnostics), ...listValue(task?.scoring_diagnostics), ...listValue(task?.resource_diagnostics)].forEach(diagnostic => container.append(textNode("p", diagnostic)));
+  [...listValue(task?.diagnostics), ...listValue(task?.scoring_diagnostics), ...listValue(task?.metadata_diagnostics), ...listValue(task?.resource_diagnostics)].forEach(diagnostic => container.append(textNode("p", diagnostic)));
 }
 
 async function selectOverviewRow(row, opener, preferredPath = null) {
@@ -1000,7 +1496,7 @@ async function fileActionMenu(item) {
     secondaryAction: {
       label: t("delete", "Delete"),
       async run() {
-        if (!window.confirm(harborMessage("harbor_delete_file_confirm", "Permanently delete “{name}”?", { name: item.path }))) return false;
+        if (!window.confirm(formatMessage("harbor_delete_file_confirm", "Permanently delete “{name}”?", { name: item.path }))) return false;
         await mutateFiles({ action: "delete", path: item.path, expected_revision: task.revision }, { rethrow: true, taskRef });
       },
     },
@@ -1093,6 +1589,7 @@ function bindHarborWorkbench() {
   if (!surface || surface.dataset.bound === "true") return;
   surface.dataset.bound = "true";
   surface.querySelector("[data-harbor-create-task]")?.addEventListener("click", createTask);
+  surface.querySelector("[data-harbor-add-column]")?.addEventListener("click", event => openCreateCustomColumn(event.currentTarget));
   surface.querySelector("[data-harbor-sync-manifest]")?.addEventListener("click", syncManifest);
   surface.querySelector("[data-harbor-state-selected]")?.addEventListener("click", mutateSelectedTaskState);
   surface.querySelector("[data-harbor-delete-selected]")?.addEventListener("click", deleteSelectedTasks);
@@ -1141,6 +1638,7 @@ function textNode(tag, value) {
 }
 
 export {
+  activeCustomColumns,
   resumeTaskSidebar,
   resumeTaskInventory,
   pauseTaskInventory,
@@ -1148,12 +1646,14 @@ export {
   confirmDiscard,
   createFile,
   createTask,
+  deleteCustomColumn,
   fileActionMenu,
   harborColumns,
   initializeHarborWorkbench,
   isHarborDirty,
   mutateSelectedTaskState,
   deleteSelectedTasks,
+  openCreateCustomColumn,
   openHarborWorkbench,
   overviewRows,
   refreshHarborInventory,

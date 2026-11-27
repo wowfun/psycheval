@@ -60,11 +60,14 @@ def test_old_task_cache_drops_inventory_and_cached_projections(tmp_path):
     cache.publish(config, {"datasets": [{"id": "one"}]})
     cache.close()
     with closing(sqlite3.connect(path)) as db:
-        db.execute("PRAGMA user_version=2")
+        db.execute("PRAGMA user_version=3")
 
     cache = TaskCatalog(path)
     assert cache.snapshot(config)["generation"] == 0
-    scored = {"items": [{"id": "custom:one", "question": "Check the output."}]}
+    scored = {
+        "items": [{"id": "custom:one", "question": "Check the output."}],
+        "custom_metadata": {"qa_status": "OK"},
+    }
     assert cache.project("scoring", signature=lambda: 1, load=lambda: scored) == scored
     cache.close()
 

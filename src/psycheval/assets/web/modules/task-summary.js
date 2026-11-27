@@ -11,17 +11,36 @@ import { downloadSummaryImage } from "./summary-image.js";
 import { bindToolbarMenus } from "./toolbar-menu.js";
 import { renderSummaryPieChart } from "./summary-pie.js";
 import { taskRowIdentity } from "./task-table.js";
+import { customColumnGroupKeys, decodeCustomColumnKey, isCustomColumnKey } from "./task-custom-columns.js";
 
 const COUNT_FIELDS = ["rule_count", "rubric_count", "scoring_item_count"];
 const METRICS = ["task_count", ...COUNT_FIELDS];
+const MAX_TEXT_GROUP_CARDINALITY = 24;
 function createTaskSummaryState() {
   return { id: "task-summary", groupBy: "dataset", chartType: "bar", open: false, groups: null, groupDraft: null, groupSearch: "", metrics: [...METRICS], metricDraft: null, metricSearch: "", exporting: false };
 }
 function taskSummaryDefinitions() {
   return [["task_count", "tasks", "Tasks"], ["rule_count", "task_rules", "Rules"], ["rubric_count", "task_rubrics", "Rubrics"], ["scoring_item_count", "task_scoring_items", "Scoring items"]].map(([key, label, fallback]) => ({ key, label: t(label, fallback), default: true }));
 }
-function taskSummaryGroupings() {
-  return [["overall", "summary_overall", "Overall"], ["dataset", "harbor_dataset", "Dataset"], ["category", "category", "Category"], ["difficulty", "task_difficulty", "Difficulty"], ["tags", "tags", "Tags"]].map(([key, label, fallback]) => ({ key, label: t(label, fallback) }));
+function isGroupableCustomColumn(col, rows) {
+  if (["enum", "boolean", "list"].includes(col.type)) return true;
+  if (col.type !== "text") return false;
+  const distinct = new Set();
+  for (const row of uniqueTasks(rows)) {
+    for (const token of customColumnGroupKeys(row.task?.custom_metadata?.[col.rawKey])) {
+      if (token === null) continue;
+      distinct.add(token);
+      if (distinct.size > MAX_TEXT_GROUP_CARDINALITY) return false;
+    }
+  }
+  return distinct.size > 0;
+}
+function taskSummaryGroupings(customColumns = [], rows = []) {
+  const builtins = [["overall", "summary_overall", "Overall"], ["dataset", "harbor_dataset", "Dataset"], ["category", "category", "Category"], ["difficulty", "task_difficulty", "Difficulty"], ["tags", "tags", "Tags"]].map(([key, label, fallback]) => ({ key, label: t(label, fallback) }));
+  const custom = (customColumns || [])
+    .filter(col => isGroupableCustomColumn(col, rows))
+    .map(col => ({ key: col.key, label: col.label, type: col.type, rawKey: col.rawKey }));
+  return [...builtins, ...custom];
 }
 function uniqueTasks(rows) {
   const seen = new Set();
@@ -34,8 +53,20 @@ function uniqueTasks(rows) {
 }
 function taskSummary(rows, groupBy) {
   const groups = new Map();
+  const customKey = isCustomColumnKey(groupBy) ? decodeCustomColumnKey(groupBy) : null;
   for (const row of uniqueTasks(rows)) {
-    let keys = groupBy === "overall" ? ["overall"] : groupBy === "dataset" ? [row.datasetId] : groupBy === "tags" ? [...new Set((row.task?.tags || []).filter(Boolean))] : [row.task?.[groupBy] ?? null];
+    let keys;
+    if (customKey !== null) {
+      keys = customColumnGroupKeys(row.task?.custom_metadata?.[customKey]);
+    } else if (groupBy === "overall") {
+      keys = ["overall"];
+    } else if (groupBy === "dataset") {
+      keys = [row.datasetId];
+    } else if (groupBy === "tags") {
+      keys = [...new Set((row.task?.tags || []).filter(Boolean))];
+    } else {
+      keys = [row.task?.[groupBy] ?? null];
+    }
     if (!keys.length) keys = [null];
     for (const key of keys) {
       if (!groups.has(key)) groups.set(key, []);
@@ -55,9 +86,30 @@ function missingCountText(group, field) {
   const count = group[`missing_${field}`];
   return count ? t("task_summary_missing", "{count} Tasks have an unknown count").replace("{count}", String(count)) : "";
 }
-function summaryModel(rows, state) {
+function groupDisplayLabel(groupKey, grouping) {
+  if (grouping?.key === "overall") return t("summary_overall", "Overall");
+  if (groupKey === null || groupKey === undefined) return t("task_group_unset", "Unset");
+  if (grouping?.type === "boolean") {
+    if (groupKey === "true") return t("yes", "Yes");
+    if (groupKey === "false") return t("no", "No");
+  }
+  return String(groupKey);
+}
+function resolveActiveGrouping(state, customColumns = [], rows = []) {
+  const groupings = taskSummaryGroupings(customColumns, rows);
+  let active = groupings.find(item => item.key === state.groupBy);
+  if (!active) {
+    state.groupBy = "dataset";
+    state.groups = null;
+    state.groupDraft = null;
+    active = groupings.find(item => item.key === "dataset");
+  }
+  return { groupings, active };
+}
+function summaryModel(rows, state, customColumns = []) {
+  const { active } = resolveActiveGrouping(state, customColumns, rows);
   const allGroups = taskSummary(rows, state.groupBy).map(group => ({ ...group, count: group.task_count,
-    label: state.groupBy === "overall" ? t("summary_overall", "Overall") : group.key ?? t("task_group_unset", "Unset") }));
+    label: groupDisplayLabel(group.key, active) }));
   const groups = comparisonGroups(allGroups, state.groups);
   const definitions = state.metrics.flatMap(key => taskSummaryDefinitions().filter(item => item.key === key));
   const palette = radarColors(allGroups.length);
@@ -67,21 +119,32 @@ function summaryModel(rows, state) {
   })), fmtNum));
   return { allGroups, groups, definitions, bars };
 }
-function taskSummaryScope(rows, state) {
+function groupingHasListOverlap(rows, state, active) {
+  if (state.groupBy === "tags") return true;
+  if (!isCustomColumnKey(state.groupBy)) return false;
+  if (active?.type === "list") return true;
+  const rawKey = decodeCustomColumnKey(state.groupBy);
+  return uniqueTasks(rows).some(row => Array.isArray(row.task?.custom_metadata?.[rawKey]));
+}
+function taskSummaryScope(rows, state, customColumns = []) {
+  const { active } = resolveActiveGrouping(state, customColumns, rows);
   const scope = t("task_summary_scope", "{count} matching Tasks.").replace("{count}", fmtNum(uniqueTasks(rows).length));
-  return scope + (state.groupBy === "tags" ? ` ${t("task_summary_tag_overlap", "A Task can belong to multiple tags; group counts may overlap.")}` : "");
+  if (state.groupBy === "tags") return `${scope} ${t("task_summary_tag_overlap", "A Task can belong to multiple tags; group counts may overlap.")}`;
+  if (groupingHasListOverlap(rows, state, active)) return `${scope} ${t("task_summary_list_overlap", "A Task can belong to multiple values; group counts may overlap.")}`;
+  return scope;
 }
 function taskSummaryExportColumns(state) {
   return ["group", ...state.metrics, ...state.metrics.filter(key => COUNT_FIELDS.includes(key)).map(key => `missing_${key}`)].map(key => ({ key }));
 }
-function renderTaskSummary(root, rows, state, { onChange, onExport }) {
+function renderTaskSummary(root, rows, state, { onChange, onExport, customColumns = [] }) {
   if (!root) return;
-  const { allGroups, groups, definitions, bars } = summaryModel(rows, state);
-  const groupLabel = taskSummaryGroupings().find(item => item.key === state.groupBy).label;
+  const { groupings, active } = resolveActiveGrouping(state, customColumns, rows);
+  const { allGroups, groups, definitions, bars } = summaryModel(rows, state, customColumns);
+  const groupLabel = active.label;
   const overall = taskSummary(rows, "overall")[0] || {};
   const options = { definitions: taskSummaryDefinitions(), defaults: METRICS, hint: key => missingCountText(overall, key) };
   const disabledReason = kind => !groups.length ? t("summary_group_select", "Select at least one comparison group.") : !definitions.length ? t("metric_select", "Select at least one available metric with data.") : ["bar", "pie"].includes(kind) && state.groupBy === "overall" ? t("summary_export_group_required", "Select a grouping to export charts.") : state.exporting ? t("summary_export_generating", "Generating image…") : "";
-  const actions = renderSummarySegments(t("summary_group_by", "Group by"), taskSummaryGroupings(), state.groupBy, "data-task-summary-group")
+  const actions = renderSummarySegments(t("summary_group_by", "Group by"), groupings, state.groupBy, "data-task-summary-group")
     + renderSummarySegments(t("summary_chart_type", "Chart"), [{ key: "bar", label: t("summary_bar", "Bar chart") }, { key: "pie", label: t("summary_pie", "Pie chart") }], state.chartType, "data-task-summary-chart")
     + renderSummaryGroupControl(state, allGroups) + renderSummaryMetricControl(state, options)
     + renderSummaryExportMenu({ id: state.id, kinds: [{ key: "xlsx", label: t("export_excel", "Export Excel") }, { key: "bar", label: t("summary_export_bar", "Bar chart (.png)") }, { key: "pie", label: t("summary_export_pie", "Pie chart (.png)") }], disabledReason });
@@ -100,28 +163,35 @@ function renderTaskSummary(root, rows, state, { onChange, onExport }) {
     }),
   ];
   const empty = !allGroups.length ? t("harbor_task_empty", "No Tasks") : !groups.length ? t("summary_group_select", "Select at least one comparison group.") : !definitions.length ? t("metric_select", "Select at least one available metric with data.") : "";
-  root.innerHTML = renderSummaryHeader({ id: state.id, title: t("task_summary", "Task Summary"), scope: taskSummaryScope(rows, state), actions })
+  root.innerHTML = renderSummaryHeader({ id: state.id, title: t("task_summary", "Task Summary"), scope: taskSummaryScope(rows, state, customColumns), actions })
     + (empty ? `<p class="leaderboard-summary-empty">${esc(empty)}</p>` : renderSummaryDisclosure({ id: "task-summary-table-region", open: state.open, summary: `${definitions.length} ${t("summary_metrics", "metrics")} · ${groups.length} ${groupLabel}`, attribute: "data-task-summary-toggle", table: state.open ? renderDataTable({ tableId: "task-summary", columns, rows: groups, rowKey: row => JSON.stringify(row.key) }) : "" })
       + (state.groupBy === "overall" ? "" : `<section class="leaderboard-summary-chart-panel" aria-label="${esc(state.chartType === "pie" ? t("summary_pie", "Pie chart") : t("summary_bar", "Bar chart"))}"><div class="leaderboard-summary-chart-head"><div><h3>${esc(groupLabel)}</h3><p>${esc(state.chartType === "pie" ? t("summary_pie_note", "Each pie shows selected groups’ shares of known positive totals. Unknown values have no slice.") : summaryBarScaleNote())}</p></div></div><div class="leaderboard-summary-chart-grid">${bars.map(bar => state.chartType === "pie" ? renderSummaryPieChart(bar) : renderSummaryBarChart(bar, t("task_summary_total", "Total"))).join("")}</div></section>`));
-  const change = selector => { onChange(); if (selector) root.querySelector(selector)?.focus({ preventScroll: true }); };
+  const change = findTarget => { onChange(); findTarget?.()?.focus({ preventScroll: true }); };
   bindSummaryGroupControl(root, state, allGroups, onChange);
   bindSummaryMetricControl(root, state, onChange, options);
   bindToolbarMenus(root);
   root.querySelectorAll("[data-task-summary-group]").forEach(button => button.addEventListener("click", () => {
     state.groupBy = button.dataset.taskSummaryGroup; state.groups = null; state.groupDraft = null; state.groupSearch = "";
-    change(`[data-task-summary-group="${state.groupBy}"]`);
+    change(() => [...root.querySelectorAll("[data-task-summary-group]")].find(node => node.dataset.taskSummaryGroup === state.groupBy));
   }));
-  root.querySelectorAll("[data-task-summary-chart]").forEach(button => button.addEventListener("click", () => { state.chartType = button.dataset.taskSummaryChart; change(`[data-task-summary-chart="${state.chartType}"]`); }));
-  root.querySelector("[data-task-summary-toggle]")?.addEventListener("click", () => { state.open = !state.open; change("[data-task-summary-toggle]"); });
+  root.querySelectorAll("[data-task-summary-chart]").forEach(button => button.addEventListener("click", () => {
+    state.chartType = button.dataset.taskSummaryChart;
+    change(() => root.querySelector(`[data-task-summary-chart="${state.chartType}"]`));
+  }));
+  root.querySelector("[data-task-summary-toggle]")?.addEventListener("click", () => {
+    state.open = !state.open;
+    change(() => root.querySelector("[data-task-summary-toggle]"));
+  });
   const menu = root.querySelector(".leaderboard-summary-export");
   root.querySelectorAll("[data-summary-export]").forEach(button => button.addEventListener("click", () => {
     if (disabledReason(button.dataset.summaryExport)) return;
     menu.open = false; menu.querySelector("summary").focus({ preventScroll: true }); onExport(button.dataset.summaryExport);
   }));
 }
-async function exportTaskSummaryImage(rows, state, kind = state.chartType || "bar") {
-  const snapshot = structuredClone({ title: t("task_summary", "Task Summary"), subtitle: taskSummaryGroupings().find(item => item.key === state.groupBy).label,
-    scope: taskSummaryScope(rows, state), bars: summaryModel(rows, state).bars });
+async function exportTaskSummaryImage(rows, state, kind = state.chartType || "bar", customColumns = []) {
+  const { active } = resolveActiveGrouping(state, customColumns, rows);
+  const snapshot = structuredClone({ title: t("task_summary", "Task Summary"), subtitle: active.label,
+    scope: taskSummaryScope(rows, state, customColumns), bars: summaryModel(rows, state, customColumns).bars });
   await downloadSummaryImage(kind, snapshot, `peval-task-summary-${kind}.png`);
 }
 async function exportTasks({ kind, mode, rows, columns, groupBy = "overall", groups = null }) {

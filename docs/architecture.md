@@ -34,10 +34,12 @@ evidence, converts strict ATIF, and builds reports and workspaces behind the
 recognition and projection for both direct CLI paths and workspace mounts;
 `psycheval.harbor.tasks` owns validated Task configuration, text
 decoding, and publishable file selection for both workspace state and the
-Dataset workbench. `harbor.task_scoring` owns non-executing scoring inventory and
-configuration previews, including WorkBuddy Office metadata. The serve boundary
-owns bounded reads and the workspace-configured manual rule counts; the Dataset
-table, summary, and exports consume their shared projection.
+Dataset workbench. `harbor.task_metadata` owns read-only custom `[metadata]`
+key/value rules and canonical column IDs; `harbor.task_scoring` owns
+non-executing scoring inventory and configuration previews, including WorkBuddy
+Office metadata. The serve boundary owns bounded reads, revision-checked
+`task.toml` metadata writes, and workspace-configured manual rule counts; the
+Dataset table, summary, and exports consume their shared projection.
 Workspace state owns only discovery, overlays, and derived
 catalog records. One EvaluationReports module resolves normalized Harbor and
 local source references, reads their canonical evaluation reports, and

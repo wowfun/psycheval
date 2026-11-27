@@ -63,14 +63,17 @@ Dataset rows include Task, Rule, Rubric, and Scoring item totals over their acti
 Tasks, independently of the lower Task table's filters. Empty Datasets have zero
 totals; an unknown Task count makes its affected total unknown. Errors appear
 beside Dataset names rather than in a Status column.
-Datasets and Leaderboard share Columns controls, including draft ordering,
+Datasets, Tasks, and Leaderboard share Columns controls, including draft ordering,
 visibility, Apply, cancellation, and Reset to auto. Automatic visibility follows
-the complete filtered table result; blank Notes and zero Reports hide, while zero
-scoring counts remain meaningful. Manual visibility wins. Preferences belong to
-the workspace and table; selection checkboxes are not business columns.
+the complete filtered table result; blank Notes and zero Reports hide on Datasets,
+built-in Task columns stay visible by default, custom Task columns appear when
+populated or newly created, and zero scoring counts remain meaningful. Manual
+visibility wins. Preferences belong to the workspace and table; selection
+checkboxes are not business columns.
 Tasks places archived visibility and scoring-item
-flattening in View; creation, manifest synchronization, archive, and deletion in
-Actions, preserving permissions and disabled states. Export remains separate.
+flattening in View; Task creation, custom column creation, manifest
+synchronization, archive, and deletion in Actions, preserving permissions and
+disabled states. Export remains separate.
 Selecting a Task opens the shared resizable right sidebar; closing it returns
 focus to the selected row.
 File drafts survive page navigation, and replacing a dirty Task requires the
@@ -165,23 +168,47 @@ management remain Task-based.
 
 Task Summary follows Dataset selection, search, and Task filters and deduplicates
 Tasks by Dataset and Task identity. It groups by Overall, Dataset, Category,
-Difficulty, or Tags. The Task table owns each row's stable Task identity and
+Difficulty, Tags, or categorical and low-cardinality custom Task metadata columns
+(`meta:<key>`, covering dropdown, boolean, list, and text columns with at most 24
+distinct values). The Task table owns each row's stable Task identity and
 preserves it when flattening scoring items. Category and Difficulty come from
 Task configuration metadata; Tags come from Task keywords. Missing labels form a
 distinct unset group. A Task
-belongs to each of its distinct tags, once per group; tag-group counts cannot be
-summed to obtain the number of matching Tasks. Groups retain first-occurrence order.
+belongs to each of its distinct tags (or list-valued custom metadata items), once
+per group; overlapping-group counts cannot be summed to obtain the number of
+matching Tasks. Groups retain first-occurrence order.
 Unknown values leave their group totals unknown with a missing-Task count; known
 Rubric totals remain available.
 With a Type filter, the summary includes each matching Task once and uses its
 Task-level totals. Task exports follow the current mode,
-visible business columns, and filtered row order rather than checkbox selection.
-JSON preserves lists; Excel writes full text and multiline lists. Summary Excel
+visible business columns (including visible custom metadata columns), and filtered
+row order rather than checkbox selection.
+JSON preserves lists and native scalar types (keying custom columns under
+`meta:<key>`); Excel writes decoded custom column headers, full text, and
+multiline lists. Summary Excel
 and chart PNG use the displayed grouping, comparison groups, and metric order.
 Data exports resolve Task references against current inventory instead of trusting
 client-supplied totals; PNG captures the displayed summary. Unknown values remain
 null or blank in data exports. Archived
 Tasks retain management controls but have no scoring view, export, or summary.
+
+Custom Task columns persist per-Task values directly under `[metadata]` in each
+native Task's `task.toml` using format-preserving `tomlkit` updates validated
+against Harbor's `TaskConfig` before atomic replacement. Reserved `[metadata]`
+keys (`category`, `difficulty`, `source_case`) cannot be overwritten as custom
+columns. Column types (`text`, `enum` with dropdown options, `number`, `boolean`,
+`list`) and empty newly-created columns are stored as workspace-scoped browser
+preferences; in fresh browsers or guest views, populated `[metadata]` keys are
+still discovered automatically with inferred types. Creating a column with an
+optional default value batch-writes only editable Tasks without overwriting
+existing values; leaving the default blank displays an empty column whose values
+persist when individual cells are edited. Inline cell edits require the Task's
+current revision (`If-Match`), preserve drafts on revision conflicts with a
+current-value preview, and remove the key from `[metadata]` when cleared.
+Deleting a custom column removes its browser preference and, when confirmed for
+populated keys, batch-removes the key from editable Tasks' `task.toml`. Guests
+and read-only WorkBuddy Datasets can read, filter, sort, group, and export custom
+columns, while mutations remain administrator-only and native-Dataset-only.
 
 Task and Leaderboard summaries share grouping, comparison-group and metric
 selectors, table disclosure, bar presentation, and image export primitives.

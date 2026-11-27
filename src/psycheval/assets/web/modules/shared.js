@@ -26,6 +26,17 @@ const I18N = scriptJson("peval-i18n", {});
 function t(key, fallback) {
   return Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : (fallback ?? key);
 }
+/** @param {string} key @param {string} fallback @param {Record<string, unknown>} [values] */
+function formatMessage(key, fallback, values = {}) {
+  let text = String(t(key, fallback));
+  for (const [name, value] of Object.entries(values)) {
+    text = text.replaceAll(`{${name}}`, String(value));
+  }
+  return text;
+}
+function browserStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
 function statusLabel(value) {
   const raw = String(value || "-");
   return t(`status.${lower(raw)}`, raw);
@@ -67,6 +78,7 @@ export {
   RENDER_OPTIONS,
   adminMode,
   authenticationEnabled,
+  browserStorage,
   esc,
   fmtCost,
   fmtDate,
@@ -76,6 +88,7 @@ export {
   fmtScore,
   fmtTps,
   fmtTtft,
+  formatMessage,
   hasMetricValue,
   listValue,
   lower,

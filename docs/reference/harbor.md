@@ -546,6 +546,15 @@ are not read from it or used as fallbacks. The shared Task loader preserves the
 original configuration bytes.
 These labels do not affect execution or scoring and have no fixed enumeration.
 
+Other top-level keys under `[metadata]` (excluding `category`, `difficulty`, and
+WorkBuddy's `source_case`) are custom Task metadata projected into the Task
+inventory without affecting execution or scoring. Custom metadata keys are
+nonblank, trimmed UTF-8 strings without control characters of at most 128 UTF-8
+bytes, bounded to 64 keys and 64 KiB of serialized JSON per Task; oversized or
+malformed entries emit Task diagnostics without aborting inventory reads.
+Non-scalar or mixed TOML values remain readable projections without inline
+workbench editing.
+
 ## WorkBuddy Tasks
 
 `prepare_workbuddy_job(config: JobConfig, *, host_settings=None) -> JobConfig`

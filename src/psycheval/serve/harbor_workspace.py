@@ -43,6 +43,7 @@ from psycheval.harbor.tasks import (
     load_harbor_task_config,
     select_publishable_task_files,
 )
+from psycheval.serve.task_metadata_writer import update_task_toml_metadata
 from psycheval.state.task_catalog import TaskCatalog
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
@@ -815,6 +816,44 @@ class HarborWorkspace:
         return self._task_scoring(
             dataset, self._task_path(self._task_root(dataset), task)
         )
+
+    def task_revision(self, dataset_id: str, task: str) -> str:
+        dataset = self._dataset(dataset_id)
+        root = self._mutable_dataset_root(dataset)
+        task_dir = self._task_path(root, task)
+        return _directory_revision(task_dir, cache=self.task_catalog)
+
+    def set_task_metadata(
+        self,
+        dataset_id: str,
+        task: str,
+        key: str,
+        value: Any,
+        *,
+        expected_revision: str,
+        overwrite: bool = True,
+    ) -> dict[str, Any]:
+        dataset = self._dataset(dataset_id)
+        resolved = self._resolved_dataset(dataset)
+        root = self._mutable_dataset_root(dataset)
+        task_dir = self._task_path(root, task)
+        self._expect_revision(task_dir, expected_revision)
+        config_path = self._safe_task_file(task_dir, "task.toml", must_exist=True)
+        content = _read_regular_file(config_path, limit=TEXT_EDIT_LIMIT)
+        try:
+            updated, changed = update_task_toml_metadata(
+                content,
+                key,
+                value,
+                overwrite=overwrite,
+                max_bytes=TEXT_EDIT_LIMIT,
+            )
+        except ValueError as exc:
+            raise HarborWorkspaceError(str(exc)) from exc
+        if changed:
+            _atomic_write(config_path, updated)
+        summary = self._task_projection(dataset, task_dir, resolved)
+        return {name: item for name, item in summary.items() if name != "resources"}
 
     def _registered_task_summaries(
         self, resolved: ResolvedHarborDataset

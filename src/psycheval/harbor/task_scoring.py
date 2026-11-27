@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from .task_metadata import extract_custom_metadata
 from .tasks import TaskFileReader, load_harbor_task_config
 from .verifier import build_scoring_plan, parse_judge_config
 
@@ -111,6 +112,7 @@ def task_scoring_inventory(
         "tags": [],
         "category": None,
         "difficulty": None,
+        "custom_metadata": {},
         "instruction": None,
         "instruction_path": "instruction.md",
         "rule_count": manual_rule_count if office else 0,
@@ -122,6 +124,7 @@ def task_scoring_inventory(
         "scoring_items": [],
         "scoring_paths": {},
         "scoring_diagnostics": [],
+        "metadata_diagnostics": [],
     }
 
     def diagnostic(path: str, exc: Exception) -> None:
@@ -145,6 +148,10 @@ def task_scoring_inventory(
     result["tags"] = list(config.task.keywords or []) if config.task else []
     for field in ("category", "difficulty"):
         result[field] = config.metadata.get(field)
+    custom_metadata, metadata_diagnostics = extract_custom_metadata(config.metadata)
+    result["custom_metadata"] = custom_metadata
+    for message in metadata_diagnostics:
+        result["metadata_diagnostics"].append(f"task.toml: {message}")
     steps = [step.name for step in config.steps] if config.steps else [""]
     if steps[0]:
         result["instruction_path"] = f"steps/{steps[0]}/instruction.md"

@@ -185,6 +185,32 @@
   font:700 12px/1.2 var(--mono);
   cursor:pointer;
 }
+.column-control-head-actions {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.column-control-row-actions {
+  grid-column:2 / -1;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.column-control-row-actions button {
+  border:0;
+  background:transparent;
+  padding:0;
+  color:var(--focus);
+  font:700 11px/1.2 var(--mono);
+  cursor:pointer;
+}
+.column-control-row-actions button.danger {
+  color:var(--fail);
+}
+.column-control-row-actions button:disabled {
+  opacity:.4;
+  cursor:default;
+}
 .column-control-list {
   max-height:min(520px,60vh);
   margin:0;

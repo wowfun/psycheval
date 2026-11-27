@@ -1,7 +1,7 @@
 import { esc, t } from "./shared.js";
 import { columnVisibleForLayout, moveColumn, normalizeColumnLayout, saveColumnLayout } from "./table-columns.js";
 
-function createColumnControl({ id, state, context, onRender, conditionText = () => "", searchText = column => `${column.label} ${column.key}`.toLocaleLowerCase(), options = {} }) {
+function createColumnControl({ id, state, context, onRender, conditionText = () => "", searchText = column => `${column.label} ${column.key}`.toLocaleLowerCase(), options = {}, headerAction = null, rowActions = null }) {
   function render(rows) {
     const { columns, layout, presence } = context(rows);
     const draft = state.draft
@@ -13,18 +13,26 @@ function createColumnControl({ id, state, context, onRender, conditionText = () 
     const rowsHtml = ordered.map((column, index) => {
       const isChecked = checked(column);
       const condition = conditionText(column);
+      const actions = typeof rowActions === "function" ? (rowActions(column) || []) : [];
+      const actionsHtml = actions.length
+        ? `<div class="column-control-row-actions">${actions.map(action => `<button type="button" class="${action.danger ? "danger" : ""}" data-column-action="${esc(action.key)}" data-column-action-target="${esc(column.key)}" ${action.disabled ? "disabled" : ""} title="${esc(action.title || action.label)}">${esc(action.label)}</button>`).join("")}</div>`
+        : "";
       return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}" data-column-match="${esc(searchText(column))}" ${searchText(column).includes((state.search || "").toLocaleLowerCase()) ? "" : "hidden"}>
         <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
         <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${column.description ? `aria-describedby="${id}-column-hint-${index}"` : ""} ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
         <span class="column-control-state">${column.unavailable ? esc(t("metric_unavailable", "Currently unavailable")) : presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
         <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
         ${column.description ? `<small class="column-description" id="${id}-column-hint-${index}">${esc(column.description)}</small>` : ""}
+        ${actionsHtml}
       </li>`;
     }).join("");
+    const headerButtons = headerAction
+      ? `<div class="column-control-head-actions"><button type="button" data-column-header-action ${headerAction.disabled ? "disabled" : ""}>${esc(headerAction.label)}</button><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>`
+      : `<button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button>`;
     return `<details class="column-control" ${state.draft ? "open" : ""}>
       <summary class="action-button column-control-button">${esc(t("columns", "Columns"))} ${visibleCount}/${ordered.length}</summary>
       <div class="column-control-panel">
-        <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>
+        <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong>${headerButtons}</div>
         <label>${esc(t("search", "Search"))}<input type="search" data-column-search value="${esc(state.search || "")}"></label>
         <ol class="column-control-list">${rowsHtml}</ol>
         <div class="column-control-foot"><span aria-live="polite">${esc(`${visibleCount} / ${ordered.length}`)}</span><button type="button" class="action-button primary" data-column-apply>${esc(t("apply", "Apply"))}</button></div>
@@ -92,6 +100,29 @@ function createColumnControl({ id, state, context, onRender, conditionText = () 
       state.draft = normalizeColumnLayout(context().columns.map(column => column.key), null, options);
       restoreFocus(root => root?.querySelector?.("[data-column-reset]"));
     });
+    if (headerAction?.onClick) {
+      details.querySelector("[data-column-header-action]")?.addEventListener("click", event => {
+        event.stopPropagation();
+        state.draft = null;
+        details.open = false;
+        headerAction.onClick(details.querySelector("summary"));
+      });
+    }
+    if (typeof rowActions === "function") {
+      details.querySelectorAll("[data-column-action]").forEach(button => {
+        button.addEventListener("click", event => {
+          event.stopPropagation();
+          const targetKey = button.dataset.columnActionTarget;
+          const actionKey = button.dataset.columnAction;
+          const column = context().columns.find(item => item.key === targetKey);
+          const action = column ? (rowActions(column) || []).find(item => item.key === actionKey) : null;
+          if (!action?.onClick) return;
+          state.draft = null;
+          details.open = false;
+          action.onClick(column, details.querySelector("summary"));
+        });
+      });
+    }
     details.querySelector("[data-column-apply]")?.addEventListener("click", () => {
       state.layout = normalizeColumnLayout(context().columns.map(column => column.key), state.draft, options);
       saveColumnLayout(state.layout, options);

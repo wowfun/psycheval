@@ -289,6 +289,7 @@ def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
                 "instruction_path",
                 "category",
                 "difficulty",
+                "custom_metadata",
                 "rule_count",
                 "rubric_count",
                 "scoring_item_count",
@@ -304,7 +305,11 @@ def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
         },
         **{
             key: [project_guest_error(400, item, "guest") for item in value[key]]
-            for key in ("scoring_diagnostics", "resource_diagnostics")
+            for key in (
+                "scoring_diagnostics",
+                "resource_diagnostics",
+                "metadata_diagnostics",
+            )
             if key in value
         },
         "directory": str(value.get("directory") or ""),

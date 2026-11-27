@@ -154,7 +154,10 @@
 }
 .action-form h3, .action-feedback p { margin:0; }
 .action-form label { display:grid; gap:6px; }
-.action-form input, .action-form textarea { width:100%; min-width:0; padding:8px; }
+.action-form input, .action-form textarea, .action-form select { width:100%; min-width:0; padding:8px; border:1px solid var(--rule); border-radius:6px; background:var(--surface); color:var(--ink); font:13px/1.35 var(--mono); }
+.action-form select { min-height:36px; cursor:pointer; }
+.action-form .action-form-hint { margin:0; color:var(--muted); font:12px/1.4 var(--sans); }
+.action-form label[hidden], .action-form .action-form-hint[hidden] { display:none; }
 .action-form [aria-invalid="true"] { border-color:var(--fail); }
 .action-field-error { margin:4px 0; color:var(--fail); }
 .action-feedback {

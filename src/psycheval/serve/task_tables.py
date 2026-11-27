@@ -1,4 +1,4 @@
-"""Dataset Task previews, manual counts, and current-view exports."""
+"""Dataset Task previews, manual counts, custom metadata, and exports."""
 
 from __future__ import annotations
 
@@ -8,9 +8,16 @@ from typing import Annotated, Any, Literal
 
 import xlsxwriter
 from fastapi import Depends, FastAPI, Header, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from psycheval.config import ManualRuleCount
+from psycheval.harbor.task_metadata import (
+    custom_metadata_group_keys,
+    is_custom_column_id,
+    parse_custom_column_id,
+    validate_custom_metadata_key,
+    validate_custom_metadata_value,
+)
 from psycheval.harbor.task_resources import task_totals
 from psycheval.i18n import messages_for
 from psycheval.serve.api_access import (
@@ -24,8 +31,10 @@ from psycheval.serve.api_access import (
 from psycheval.serve.api_http import (
     etag,
     expect_revision,
+    if_match_value,
     json_response,
     operation_payload,
+    operation_response,
 )
 from psycheval.serve.api_support import harbor_workspace, writable_runtime
 from psycheval.serve.harbor_workspace import HarborWorkspaceError, config_revision
@@ -35,6 +44,10 @@ from psycheval.serve.visibility import (
     project_harbor_text_file,
 )
 
+BUILTIN_SUMMARY_GROUPINGS = frozenset(
+    ("overall", "dataset", "category", "difficulty", "tags")
+)
+
 
 class _Request(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -42,6 +55,28 @@ class _Request(BaseModel):
 
 class TaskRuleCount(_Request):
     count: ManualRuleCount | None
+
+
+CustomMetadataKey = Annotated[str, AfterValidator(validate_custom_metadata_key)]
+CustomMetadataValue = Annotated[Any, AfterValidator(validate_custom_metadata_value)]
+
+
+class TaskMetadataPatch(_Request):
+    key: CustomMetadataKey
+    value: CustomMetadataValue = None
+
+
+class TaskMetadataBatchItem(_Request):
+    dataset_id: str
+    task: str
+    etag: str
+
+
+class TaskMetadataBatchOperation(_Request):
+    key: CustomMetadataKey
+    value: CustomMetadataValue = None
+    overwrite: bool = False
+    items: list[TaskMetadataBatchItem] = Field(min_length=1, max_length=100_000)
 
 
 class TaskPreview(_Request):
@@ -59,11 +94,16 @@ class TaskExport(_Request):
     kind: Literal["xlsx", "json"]
     mode: Literal["tasks", "items", "summary"]
     rows: list[TaskRowRef] = Field(max_length=100_000)
-    columns: list[str] = Field(default_factory=list, max_length=20)
-    group_by: Literal["overall", "dataset", "category", "difficulty", "tags"] = (
-        "overall"
-    )
+    columns: list[str] = Field(default_factory=list, max_length=128)
+    group_by: str = "overall"
     comparison_groups: list[str | None] | None = Field(default=None, max_length=100_000)
+
+    @field_validator("group_by")
+    @classmethod
+    def _validate_group_by(cls, value: str) -> str:
+        if value in BUILTIN_SUMMARY_GROUPINGS or is_custom_column_id(value):
+            return value
+        raise ValueError(f"Invalid Task summary grouping: {value}")
 
 
 TASK_COLUMNS = {
@@ -110,8 +150,15 @@ SUMMARY_COLUMNS = {
 
 def task_summary(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, Any]]:
     groups: dict[str | None, list[dict[str, Any]]] = {}
+    custom_key = (
+        parse_custom_column_id(group_by) if is_custom_column_id(group_by) else None
+    )
     for row in rows:
-        if group_by == "tags":
+        if custom_key is not None:
+            metadata = row.get("custom_metadata")
+            raw_value = metadata.get(custom_key) if isinstance(metadata, dict) else None
+            keys = custom_metadata_group_keys(raw_value)
+        elif group_by == "tags":
             keys = list(dict.fromkeys(tag for tag in row.get("tags", []) if tag)) or [
                 None
             ]
@@ -135,6 +182,11 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
             datasets[ref.dataset_id] = {
                 task["directory"]: task for task in projected["datasets"][0]["tasks"]
             }
+    custom_columns = [
+        (key, parse_custom_column_id(key))
+        for key in request.columns
+        if is_custom_column_id(key)
+    ]
     result, seen, item_indexes = [], set(), {}
     for ref in request.rows:
         task = datasets[ref.dataset_id].get(ref.task)
@@ -148,7 +200,12 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
         if identity in seen:
             continue
         seen.add(identity)
-        row = {
+        custom_metadata = (
+            task.get("custom_metadata")
+            if isinstance(task.get("custom_metadata"), dict)
+            else {}
+        )
+        row: dict[str, Any] = {
             "dataset": ref.dataset_id,
             "task": ref.task,
             **{
@@ -156,9 +213,17 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
                 for key in TASK_COLUMNS
                 if key not in {"dataset", "task"}
             },
+            **{
+                column_id: custom_metadata.get(raw_key)
+                for column_id, raw_key in custom_columns
+            },
         }
         if request.mode == "summary":
-            row.update(category=task.get("category"), difficulty=task.get("difficulty"))
+            row.update(
+                category=task.get("category"),
+                difficulty=task.get("difficulty"),
+                custom_metadata=custom_metadata,
+            )
         if request.mode == "items":
             task_key = (ref.dataset_id, ref.task)
             if task_key not in item_indexes:
@@ -189,6 +254,20 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
     return [group for group in summary if group["group"] in selected]
 
 
+def _valid_export_column(
+    key: str, mode: str, definitions: dict[str, tuple[str, str]]
+) -> bool:
+    if key in definitions:
+        return True
+    return mode in {"tasks", "items"} and is_custom_column_id(key)
+
+
+def _json_export_key(key: str) -> str:
+    if is_custom_column_id(key):
+        return f"meta:{parse_custom_column_id(key)}"
+    return key
+
+
 def build_task_export(
     rows: list[dict[str, Any]], request: TaskExport, locale: str
 ) -> tuple[bytes, str, str]:
@@ -201,17 +280,20 @@ def build_task_export(
     )
     columns = request.columns or list(definitions)
     if len(set(columns)) != len(columns) or any(
-        key not in definitions for key in columns
+        not _valid_export_column(key, request.mode, definitions) for key in columns
     ):
         raise HarborWorkspaceError("Invalid Task export columns")
-    projected = [{key: row.get(key) for key in columns} for row in rows]
     filename = f"peval-task-{request.mode}"
     if request.kind == "json":
+        projected = [
+            {_json_export_key(key): row.get(key) for key in columns} for row in rows
+        ]
         return (
             (json.dumps(projected, ensure_ascii=False, indent=2) + "\n").encode(),
             "application/json; charset=utf-8",
             filename + ".json",
         )
+    projected = [{key: row.get(key) for key in columns} for row in rows]
     messages = messages_for(locale)
     output = io.BytesIO()
     with xlsxwriter.Workbook(
@@ -226,8 +308,12 @@ def build_task_export(
         )
         body = workbook.add_format({"valign": "top", "text_wrap": True})
         for index, key in enumerate(columns):
-            label_key, fallback = definitions[key]
-            sheet.write(0, index, messages.get(label_key, fallback), header)
+            if is_custom_column_id(key):
+                title = parse_custom_column_id(key)
+            else:
+                label_key, fallback = definitions[key]
+                title = messages.get(label_key, fallback)
+            sheet.write(0, index, title, header)
             sheet.set_column(
                 index,
                 index,
@@ -257,6 +343,8 @@ def build_task_export(
                         else json.dumps(item, ensure_ascii=False)
                         for item in value
                     )
+                elif isinstance(value, dict):
+                    value = json.dumps(value, ensure_ascii=False)
                 if isinstance(value, str) and len(value) > 32767:
                     raise HarborWorkspaceError(
                         "Excel cells are limited to 32767 characters; export JSON for complete text"
@@ -311,6 +399,87 @@ def register_task_table_routes(app: FastAPI) -> None:
                 "ETag": etag(config_revision(runtime.store.paths.config_path)),
                 "X-Peval-Invalidations": "tasks,dataset-registry",
             },
+        )
+
+    @app.patch(
+        base + "/metadata",
+        dependencies=[Depends(require_admin), Depends(mutation_guard)],
+    )
+    @access(ADMIN_ACCESS)
+    def patch_task_metadata(
+        request: Request,
+        dataset_id: str,
+        task: str,
+        body: TaskMetadataPatch,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ):
+        runtime = writable_runtime(request)
+        current_revision = harbor_workspace(runtime.store, runtime).task_revision(
+            dataset_id, task
+        )
+        expected = expect_revision(if_match, current_revision)
+
+        def update():
+            return harbor_workspace(runtime.store, runtime).set_task_metadata(
+                dataset_id,
+                task,
+                body.key,
+                body.value,
+                expected_revision=expected,
+                overwrite=True,
+            )
+
+        result = runtime.mutate_with_background_reconcile(
+            "harbor-task-metadata", update
+        )
+        operation = runtime.operation(result["operation"]["operation_id"])
+        updated_task = result["result"]
+        return json_response(
+            {**operation_payload(operation), "task": updated_task},
+            status=202,
+            headers={
+                "Location": f"/api/operations/{operation.operation_id}",
+                "Retry-After": "1",
+                "ETag": etag(str(updated_task["revision"])),
+                "X-Peval-Invalidations": "tasks,dataset-registry",
+            },
+        )
+
+    @app.post(
+        "/api/harbor/task-metadata-operations",
+        dependencies=[Depends(require_admin), Depends(mutation_guard)],
+    )
+    @access(ADMIN_ACCESS)
+    def batch_task_metadata(request: Request, body: TaskMetadataBatchOperation):
+        runtime = writable_runtime(request)
+        items = [
+            {
+                "dataset_id": item.dataset_id,
+                "task": item.task,
+                "expected_revision": if_match_value(item.etag),
+            }
+            for item in body.items
+        ]
+
+        def action(item: dict[str, str]) -> dict[str, Any]:
+            updated = harbor_workspace(runtime.store, runtime).set_task_metadata(
+                item["dataset_id"],
+                item["task"],
+                body.key,
+                body.value,
+                expected_revision=item["expected_revision"],
+                overwrite=body.overwrite,
+            )
+            return {
+                "dataset_id": item["dataset_id"],
+                "task": item["task"],
+                "revision": updated["revision"],
+            }
+
+        operation = runtime.start_operation("harbor-task-metadata", items, action)
+        return operation_response(
+            operation,
+            headers={"X-Peval-Invalidations": "tasks,dataset-registry"},
         )
 
     @app.post(base + "/preview", dependencies=[Depends(mutation_guard)])

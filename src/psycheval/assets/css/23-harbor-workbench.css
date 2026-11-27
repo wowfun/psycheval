@@ -334,6 +334,8 @@
 .harbor-overview-table th[data-table-column="rule_count"] { --table-column-max:20ch; min-width:112px; }
 .harbor-overview-table th[data-table-column="rubric_count"] { --table-column-max:20ch; min-width:128px; }
 .harbor-overview-table th[data-table-column="scoring_item_count"] { --table-column-max:24ch; min-width:184px; }
+.harbor-overview-table th[data-table-column^="meta:"] { --table-column-max:24ch; min-width:140px; }
+.harbor-workbench-tools [data-task-columns-control][hidden] { display:none; }
 .task-unexpanded { padding:0 16px 10px; margin:0; font-size:13px; }
 .harbor-overview-table [data-table-column="instruction"],
 .harbor-overview-table [data-table-column-key="instruction"] { --table-column-max:42ch; min-width:24ch; }
