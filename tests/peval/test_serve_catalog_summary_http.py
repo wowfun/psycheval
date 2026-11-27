@@ -63,6 +63,13 @@ class ServeCatalogSummaryHttpTests(CatalogHttpTestCase):
                     page = json.loads(body)
                     self.assertEqual(page["items"][0]["dataset_id"], expected)
                     self.assertEqual(page["column_presence"]["dataset_id"], 107)
+                    self.assertEqual(
+                        page["facets"]["datasets"],
+                        [
+                            {"value": "alpha", "count": 105},
+                            {"value": "beta", "count": 2},
+                        ],
+                    )
                     status, _, body = self.request(
                         server,
                         "GET",
@@ -78,7 +85,7 @@ class ServeCatalogSummaryHttpTests(CatalogHttpTestCase):
                 self.assertEqual(len(page["items"]), 5)
                 self.assertEqual(
                     page["facets"]["datasets"],
-                    [{"value": "alpha", "count": 105}, {"value": "beta", "count": 2}],
+                    [{"value": "alpha", "count": 105}],
                 )
                 runtime.workspace_views.save(
                     name="Alpha",

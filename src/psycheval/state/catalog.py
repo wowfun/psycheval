@@ -413,7 +413,7 @@ class WorkspaceCatalog:
             facets = (
                 self._facets(
                     connection,
-                    *self._combined_facet_where(query, normalized_any_queries),
+                    *self._combined_query_where(query, normalized_any_queries),
                 )
                 if include_facets
                 else _empty_facets()

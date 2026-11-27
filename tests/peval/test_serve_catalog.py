@@ -1081,7 +1081,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_facets_cover_complete_readable_current_source_state(self) -> None:
+    def test_facets_follow_matching_query_rows_across_readable_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             definitions = [
@@ -1112,6 +1112,30 @@ class WorkspaceCatalogTests(unittest.TestCase):
             store, catalog = self.catalog(root)
             try:
                 catalog.reconcile()
+                unfiltered_active = catalog.query(CatalogQuery())
+                self.assertEqual(unfiltered_active.total, 2)
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active.facets["categories"]
+                    },
+                    {"secondary": 1, "shared": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active.facets["tags"]
+                    },
+                    {"alpha": 1, "beta": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active.facets["results"]
+                    },
+                    {"failed": 1, "passed": 1},
+                )
+
                 active = catalog.query(
                     CatalogQuery(
                         search="needle",
@@ -1126,15 +1150,32 @@ class WorkspaceCatalogTests(unittest.TestCase):
                         item["value"]: item["count"]
                         for item in active.facets["categories"]
                     },
-                    {"secondary": 1, "shared": 1},
+                    {"shared": 1},
                 )
                 self.assertEqual(
                     {item["value"]: item["count"] for item in active.facets["tags"]},
-                    {"alpha": 1, "beta": 1},
+                    {"alpha": 1},
                 )
                 self.assertEqual(
                     {item["value"]: item["count"] for item in active.facets["results"]},
-                    {"failed": 1, "passed": 1},
+                    {"passed": 1},
+                )
+
+                cross_filtered = catalog.query(CatalogQuery(results=("passed",)))
+                self.assertEqual(cross_filtered.total, 1)
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in cross_filtered.facets["categories"]
+                    },
+                    {"shared": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in cross_filtered.facets["tags"]
+                    },
+                    {"alpha": 1},
                 )
 
                 archived = catalog.query(
@@ -1154,6 +1195,21 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     ["archive-category"],
                 )
 
+                all_unfiltered = catalog.query(CatalogQuery(state="all"))
+                self.assertEqual(all_unfiltered.total, 3)
+                self.assertEqual(
+                    {item["value"] for item in all_unfiltered.facets["tags"]},
+                    {"alpha", "beta", "archived"},
+                )
+                self.assertNotIn(
+                    "ghost",
+                    {item["value"] for item in all_unfiltered.facets["tags"]},
+                )
+                self.assertEqual(
+                    {item["value"] for item in all_unfiltered.facets["categories"]},
+                    {"shared", "secondary", "archive-category"},
+                )
+
                 all_states = catalog.query(
                     CatalogQuery(
                         state="all",
@@ -1165,14 +1221,11 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 self.assertEqual(all_states.total, 1)
                 self.assertEqual(
                     {item["value"] for item in all_states.facets["tags"]},
-                    {"alpha", "beta", "archived"},
-                )
-                self.assertNotIn(
-                    "ghost", {item["value"] for item in all_states.facets["tags"]}
+                    {"alpha"},
                 )
                 self.assertEqual(
                     {item["value"] for item in all_states.facets["categories"]},
-                    {"shared", "secondary", "archive-category"},
+                    {"shared"},
                 )
                 self.assertEqual(
                     catalog.query(

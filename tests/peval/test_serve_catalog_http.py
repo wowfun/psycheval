@@ -231,7 +231,7 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_catalog_http_facets_ignore_search_and_column_filters_within_state(
+    def test_catalog_http_facets_reflect_matching_query_rows(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -273,6 +273,32 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
 
             store, _runtime, server, thread = self.running_server(root)
             try:
+                status, _headers, body = self.request(server, "GET", "/api/catalog")
+                self.assertEqual(status, 200)
+                unfiltered_active = json.loads(body)
+                self.assertEqual(unfiltered_active["total"], 2)
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active["facets"]["categories"]
+                    },
+                    {"Safety, Eval": 1, "shared": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active["facets"]["tags"]
+                    },
+                    {"alpha": 1, "beta": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in unfiltered_active["facets"]["results"]
+                    },
+                    {"failed": 1, "passed": 1},
+                )
+
                 status, _headers, body = self.request(
                     server,
                     "GET",
@@ -286,18 +312,18 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
                         item["value"]: item["count"]
                         for item in active["facets"]["categories"]
                     },
-                    {"Safety, Eval": 1, "shared": 1},
+                    {"shared": 1},
                 )
                 self.assertEqual(
                     {item["value"]: item["count"] for item in active["facets"]["tags"]},
-                    {"alpha": 1, "beta": 1},
+                    {"alpha": 1},
                 )
                 self.assertEqual(
                     {
                         item["value"]: item["count"]
                         for item in active["facets"]["results"]
                     },
-                    {"failed": 1, "passed": 1},
+                    {"passed": 1},
                 )
 
                 status, _headers, body = self.request(
@@ -323,7 +349,34 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
                     "/api/catalog?category=Safety%2C%20Eval",
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["total"], 1)
+                safety = json.loads(body)
+                self.assertEqual(safety["total"], 1)
+                self.assertEqual(
+                    {item["value"]: item["count"] for item in safety["facets"]["tags"]},
+                    {"beta": 1},
+                )
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in safety["facets"]["results"]
+                    },
+                    {"failed": 1},
+                )
+
+                status, _headers, body = self.request(
+                    server, "GET", "/api/catalog?state=all"
+                )
+                self.assertEqual(status, 200)
+                all_unfiltered = json.loads(body)
+                self.assertEqual(all_unfiltered["total"], 3)
+                self.assertEqual(
+                    {item["value"] for item in all_unfiltered["facets"]["tags"]},
+                    {"alpha", "beta", "archived"},
+                )
+                self.assertEqual(
+                    {item["value"] for item in all_unfiltered["facets"]["categories"]},
+                    {"shared", "Safety, Eval", "archive-category"},
+                )
 
                 status, _headers, body = self.request(
                     server,
@@ -336,11 +389,11 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
                 self.assertEqual(all_states["total"], 1)
                 self.assertEqual(
                     {item["value"] for item in all_states["facets"]["tags"]},
-                    {"alpha", "beta", "archived"},
+                    {"alpha"},
                 )
                 self.assertEqual(
                     {item["value"] for item in all_states["facets"]["categories"]},
-                    {"shared", "Safety, Eval", "archive-category"},
+                    {"shared"},
                 )
 
                 status, _headers, body = self.request(
