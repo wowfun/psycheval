@@ -923,7 +923,6 @@ ZH_CN_MESSAGES: dict[str, str] = {
     "harbor_evidence": "Harbor Evidence",
     "live_task_metadata_notice": "Task metadata 从已配置白名单实时读取，不是历史 Job 证据。",
     "identity": "标识",
-    "reward_dimensions": "Reward 维度",
     "workbuddy_verifier": "WorkBuddy 验证器",
     "workbuddy_score": "权威分数",
     "workbuddy_score_source": "分数来源",

@@ -923,7 +923,6 @@ EN_MESSAGES: dict[str, str] = {
     "harbor_evidence": "Harbor Evidence",
     "live_task_metadata_notice": "Task metadata is read live from the configured allowlist; it is not historical Job evidence.",
     "identity": "Identity",
-    "reward_dimensions": "Reward dimensions",
     "workbuddy_verifier": "WorkBuddy verifier",
     "workbuddy_score": "Canonical score",
     "workbuddy_score_source": "Score source",

@@ -23,8 +23,6 @@ function renderVerificationSummary(meta) {
   for (const [key, value] of Object.entries(evidence.components || {})) {
     if (number(value)) entries.push([label(key), value]);
   }
-  const rewards = Object.entries(meta?.rewards || {}).filter(([, value]) => number(value));
-  if (rewards.length) entries.push([t("reward_dimensions", "Reward dimensions"), Object.fromEntries(rewards)]);
   return `<dl class="verification-summary">${entries.map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${esc(literal(value))}</dd></div>`).join("")}</dl>`;
 }
 
