@@ -430,7 +430,7 @@ function createJobsPage({ root, app }) {
     jobSidebar = createCollectionSidebar({ id: "jobs-detail", pageRoot: root, content: q("[data-job-detail]"), title: "Job" });
     const taskContent = document.createElement("div");
     taskContent.className = "harbor-workbench-grid harbor-task-browser";
-    taskContent.innerHTML = `<section class="harbor-pane"><div class="harbor-file-tree" data-harbor-file-tree></div></section><section class="harbor-pane harbor-editor-pane"><header class="harbor-editor-head"><strong data-harbor-editor-path></strong><span data-harbor-editor-meta></span></header><textarea class="harbor-editor" data-harbor-editor readonly></textarea></section>`;
+    taskContent.innerHTML = `<section class="harbor-pane"><div class="harbor-file-tree" data-harbor-file-tree></div></section><section class="harbor-pane harbor-editor-pane"><header class="harbor-editor-head"><div><strong data-harbor-editor-path></strong><span data-harbor-editor-meta></span></div></header><textarea class="harbor-editor" data-harbor-editor readonly></textarea></section>`;
     taskSidebar = createCollectionSidebar({ id: "jobs-task", pageRoot: root, content: taskContent, title: t("jobs_task_details", "Task details") });
     taskBrowser = createTaskBrowser({ root: taskContent, editable: false,
       loadTask: ref => serveApi(`/api/harbor/datasets/${encodeURIComponent(ref.dataset_id)}/tasks/${encodeURIComponent(ref.task)}`),

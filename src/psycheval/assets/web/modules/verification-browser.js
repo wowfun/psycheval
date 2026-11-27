@@ -1,4 +1,4 @@
-import { adminMode, t } from "./shared.js";
+import { adminMode, localFileRevealEnabled, t } from "./shared.js";
 import { createJudgeWorkbench } from "./judge-workbench.js";
 import { serveApi } from "./serve-effects.js";
 import { bindCopyButton } from "./clipboard.js";
@@ -6,7 +6,7 @@ import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes,
 import { interpretVerificationFile, renderVerificationDocument } from "./verification-formats.js";
 import { createJsonView } from "./json-view.js";
 
-function createVerificationBrowser({ request = serveApi } = {}) {
+function createVerificationBrowser({ request = serveApi, canReveal = localFileRevealEnabled } = {}) {
   const judge = createJudgeWorkbench({ request });
   const element = document.createElement("div"); element.className = "verification-browser";
   element.innerHTML = `<section class="verification-files"><input type="search" data-verification-search><div class="harbor-file-tree" data-verification-tree></div></section>
@@ -54,6 +54,30 @@ function createVerificationBrowser({ request = serveApi } = {}) {
     node("[data-verification-path]").textContent = selected?.path || "";
     node("[data-verification-size]").textContent = selected ? formatBytes(selected.size) : "";
     if (!selected) return;
+    let reveal = null;
+    if (canReveal?.() && sourceKey && selected.id) {
+      reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "action-button compact";
+      reveal.dataset.fileReveal = "";
+      reveal.textContent = t("reveal_in_file_manager", "Reveal in file manager");
+      reveal.onclick = async () => {
+        if (reveal.disabled) return;
+        const currentSource = sourceKey;
+        const currentSelected = selected;
+        reveal.disabled = true;
+        try {
+          await request(`${url(currentSelected)}/reveal`, { method: "POST", body: {} });
+        } catch (error) {
+          if (currentSource === sourceKey && currentSelected === selected) {
+            notice(error?.message || String(error));
+          }
+        } finally {
+          if (reveal.isConnected) reveal.disabled = false;
+        }
+      };
+      actions.append(reveal);
+    }
     if (selected.preview_kind === "image") {
       const image = document.createElement("img"); image.alt = selected.path; image.src = url(selected);
       image.onerror = () => { if (body.contains(image)) notice(t("verification_preview_failed", "File preview unavailable")); };
@@ -62,7 +86,8 @@ function createVerificationBrowser({ request = serveApi } = {}) {
     if (!payload) return;
     const raw = document.createElement("pre"); raw.className = "verification-raw"; showFileText(raw, payload.content);
     const copy = document.createElement("button"); copy.className = "action-button compact"; copy.textContent = t("copy", "Copy");
-    bindCopyButton(copy, () => payload?.content || "", selected.path); actions.append(copy);
+    bindCopyButton(copy, () => payload?.content || "", selected.path);
+    if (reveal) actions.insertBefore(copy, reveal); else actions.append(copy);
     const model = interpretVerificationFile(selected.path, payload.content, payload.truncated);
     const markdown = createFileMarkdown(selected.path, payload.content, payload.truncated);
     const documentView = markdown || (model ? renderVerificationDocument(model, evidence, {

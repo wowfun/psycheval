@@ -817,6 +817,18 @@ class HarborWorkspace:
             dataset, self._task_path(self._task_root(dataset), task)
         )
 
+    def resolve_task_file_path(
+        self, dataset_id: str, task: str, relative_path: str
+    ) -> Path:
+        dataset = self._dataset(dataset_id)
+        root = self._task_root(dataset)
+        task_dir = self._task_path(root, task)
+        path = self._safe_task_file(task_dir, relative_path, must_exist=True)
+        value = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(value.st_mode):
+            raise HarborWorkspaceError("Task path must be a regular file")
+        return path.resolve(strict=True)
+
     def task_revision(self, dataset_id: str, task: str) -> str:
         dataset = self._dataset(dataset_id)
         root = self._mutable_dataset_root(dataset)

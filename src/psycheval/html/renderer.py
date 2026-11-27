@@ -25,6 +25,7 @@ def render_serve_html(
     workspace_description: str | None = None,
     role: str = "admin",
     authentication_enabled: bool = False,
+    local_client: bool = False,
     serve_page: str = "home",
     csp_nonce: str = "static-render",
     effective_timezone: str = "UTC",
@@ -39,6 +40,7 @@ def render_serve_html(
         "workspace_id": workspace_id or "default",
         "role": role,
         "authentication_enabled": bool(authentication_enabled),
+        "local_client": bool(local_client),
         "initial_page": normalized_page,
         "csp_nonce": csp_nonce,
     }

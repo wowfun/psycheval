@@ -1,4 +1,4 @@
-import { esc, listValue, t } from "./shared.js";
+import { esc, listValue, localFileRevealEnabled, t } from "./shared.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
 import { createScoringPreview } from "./task-file-preview.js";
 import { serveApi } from "./http.js";
@@ -9,6 +9,8 @@ function createTaskBrowser(options = {}) {
   const browser = {
     root: options.root || null,
     editable: Boolean(options.editable),
+    canReveal: typeof options.canReveal === "function" ? options.canReveal : localFileRevealEnabled,
+    revealFile: options.revealFile || null,
     readFile: options.readFile,
     loadTask: options.loadTask,
     onContextMenu: options.onContextMenu || null,
@@ -24,6 +26,8 @@ function createTaskBrowser(options = {}) {
     raw: false,
     dirty: false,
     busy: false,
+    revealing: false,
+    revealError: "",
     taskRequestId: 0,
     taskRequestPromise: null,
     previewStatus: "empty",
@@ -52,12 +56,30 @@ function createTaskBrowser(options = {}) {
       setDirty(editor.value !== browser.savedText);
       syncControls();
     });
+    const head = node(".harbor-editor-head");
+    let actions = node(".harbor-editor-actions");
+    if (!actions && head) {
+      actions = document.createElement("div");
+      actions.className = "harbor-editor-actions";
+      head.append(actions);
+    }
+    const actionHost = actions || head || editor.parentElement;
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "action-button compact";
     toggle.dataset.filePreviewToggle = "";
     toggle.hidden = true;
-    (node(".harbor-editor-actions") || node(".harbor-editor-head") || editor.parentElement).append(toggle);
+    actionHost.append(toggle);
+    if (browser.canReveal?.()) {
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "action-button compact";
+      reveal.dataset.fileReveal = "";
+      reveal.textContent = t("reveal_in_file_manager", "Reveal in file manager");
+      reveal.hidden = true;
+      reveal.addEventListener("click", () => { void revealCurrentFile(); });
+      actionHost.append(reveal);
+    }
     const preview = document.createElement("div");
     preview.className = "harbor-markdown";
     preview.dataset.harborMarkdown = "";
@@ -122,6 +144,7 @@ function createTaskBrowser(options = {}) {
     browser.savedText = "";
     browser.draftText = "";
     browser.raw = false;
+    browser.revealError = "";
     setDirty(false);
     browser.previewStatus = "empty";
     browser.previewMessage = "";
@@ -160,6 +183,7 @@ function createTaskBrowser(options = {}) {
     if (!options.skipDiscard && browser.dirty && !window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"))) return null;
     const isCurrent = fileRead.begin();
     clearStructuredPreview();
+    browser.revealError = "";
     browser.filePath = item.path;
     browser.fileRevision = null;
     browser.savedText = "";
@@ -249,6 +273,8 @@ function createTaskBrowser(options = {}) {
     browser.draftText = "";
     browser.raw = false;
     browser.dirty = false;
+    browser.revealing = false;
+    browser.revealError = "";
     browser.previewStatus = "empty";
     browser.previewMessage = "";
     if (!keepRoot) browser.root = null;
@@ -302,6 +328,7 @@ function createTaskBrowser(options = {}) {
       resources.innerHTML = `<ul>${entries.map((entry, index) => `<li>${entry.path ? `<button type="button" class="action-button compact" data-resource-index="${index}">${esc(entry.name)}</button>` : `<span>${esc(entry.name)}</span>`}${entry.archive ? `<small>${esc(entry.archive)}</small>` : ""}</li>`).join("")}</ul>${!entries.length ? `<p>${esc(t("task_resources_empty", "No statically available resources"))}</p>` : ""}`;
       resources.querySelectorAll("[data-resource-index]").forEach(button => button.addEventListener("click", () => openPath(entries[Number(button.dataset.resourceIndex)].path)));
       const notice = node("[data-task-preview-error]"); if (notice) notice.hidden = true;
+      renderRevealError();
       return;
     }
     const markdown = browser.previewStatus === "ready" ? createFileMarkdown(browser.filePath, browser.draftText) : null;
@@ -325,6 +352,61 @@ function createTaskBrowser(options = {}) {
     if (!notice) { notice = document.createElement("p"); notice.dataset.taskPreviewError = ""; notice.className = "copy task-preview-error"; notice.setAttribute("role", "status"); editor.before(notice); }
     notice.hidden = !scoring || !browser.structuredError;
     notice.textContent = browser.structuredError;
+    renderRevealError();
+  }
+
+  function renderRevealError() {
+    const editor = node("[data-harbor-editor]");
+    if (!editor) return;
+    let notice = node("[data-task-reveal-error]");
+    if (!notice && !browser.revealError) return;
+    if (!notice) {
+      notice = document.createElement("p");
+      notice.dataset.taskRevealError = "";
+      notice.className = "copy task-preview-error";
+      notice.setAttribute("role", "status");
+      editor.before(notice);
+    }
+    notice.hidden = browser.previewStatus === "resources" || !browser.revealError;
+    notice.textContent = browser.revealError;
+  }
+
+  function canRevealCurrentFile() {
+    return Boolean(
+      browser.canReveal?.()
+      && browser.taskRef
+      && browser.previewStatus !== "resources"
+      && browser.filePath
+      && listValue(browser.detail?.tree).some(item => item.kind === "file" && item.path === browser.filePath),
+    );
+  }
+
+  async function revealCurrentFile() {
+    if (browser.revealing || !canRevealCurrentFile()) return;
+    const ref = browser.taskRef;
+    const path = browser.filePath;
+    browser.revealing = true;
+    browser.revealError = "";
+    syncControls();
+    renderRevealError();
+    try {
+      const invoke = browser.revealFile || ((taskRef, filePath) => serveApi(
+        `/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}/reveal`,
+        { method: "POST", body: { path: filePath } },
+      ));
+      await invoke(ref, path);
+    } catch (error) {
+      if (browser.taskRef === ref && browser.filePath === path) {
+        if (typeof browser.onError === "function") browser.onError(error);
+        else {
+          browser.revealError = error?.message || String(error);
+          renderRevealError();
+        }
+      }
+    } finally {
+      browser.revealing = false;
+      syncControls();
+    }
   }
 
   function isScoringFile() { return /(?:^|\/)(grader\.json|judge\.yaml)$/.test(browser.filePath || ""); }
@@ -360,6 +442,12 @@ function createTaskBrowser(options = {}) {
   function syncControls() {
     const save = node("[data-harbor-save]");
     if (save) save.disabled = !canEditFile() || browser.busy || !browser.dirty;
+    const reveal = node("[data-file-reveal]");
+    if (reveal) {
+      const available = canRevealCurrentFile();
+      reveal.hidden = !available;
+      reveal.disabled = !available || browser.revealing;
+    }
     const path = node("[data-harbor-editor-path]");
     if (path && browser.filePath) path.textContent = `${browser.filePath}${browser.dirty ? " •" : ""}`;
   }
@@ -410,6 +498,7 @@ function createTaskBrowser(options = {}) {
     showResources(kind) {
       if (browser.dirty && !window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"))) return;
       fileRead.invalidate(); clearStructuredPreview();
+      browser.revealError = "";
       browser.filePath = null; browser.fileRevision = null; browser.savedText = ""; browser.draftText = "";
       setDirty(false); browser.previewStatus = "resources"; browser.resourceKind = kind;
       render();

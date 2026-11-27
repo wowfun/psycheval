@@ -3,6 +3,7 @@ from psycheval.serve.api_support import *  # noqa: F401,F403
 from psycheval.serve.assets import *  # noqa: F401,F403
 from psycheval.serve.constants import *  # noqa: F401,F403
 from psycheval.serve.errors import *  # noqa: F401,F403
+from psycheval.serve.file_reveal import *  # noqa: F401,F403
 from psycheval.serve.lifecycle import *  # noqa: F401,F403
 from psycheval.serve.path_picker import *  # noqa: F401,F403
 from psycheval.serve.payloads import *  # noqa: F401,F403

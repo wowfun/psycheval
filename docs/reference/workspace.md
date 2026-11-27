@@ -351,7 +351,14 @@ The Home and Dataset Task browsers share the Verification browser's Markdown
 preview: complete `.md` and `.markdown` files open rendered, with a raw-text
 toggle. Task editing uses the raw view and preserves drafts when switching views.
 Embedded HTML remains literal text. These file browsers expose no per-file
-download controls.
+download controls. For direct localhost administrator sessions, the Verification
+and Task file preview headers offer a Reveal in file manager action for the
+currently selected file (including images and metadata-only binary files).
+The server enforces administrator access, same-origin JSON guards, a direct
+loopback peer and `localhost`/loopback `Host` without forwarding headers, and
+domain containment checks before invoking the host file manager; non-local or
+guest requests receive HTTP 403, and headless or unsupported hosts receive HTTP
+503 without disclosing absolute paths in the response.
 WorkBuddy inventory rows report registration identity without recursively
 validating or hashing every Task tree. Opening a Task detail validates that
 selected Task against its current files and exposes the resulting diagnostic

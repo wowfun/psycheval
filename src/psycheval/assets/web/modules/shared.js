@@ -70,6 +70,7 @@ function hasMetricValue(value) {
 }
 function adminMode() { return RENDER_OPTIONS?.role !== "guest"; }
 function authenticationEnabled() { return Boolean(RENDER_OPTIONS?.authentication_enabled); }
+function localFileRevealEnabled() { return adminMode() && Boolean(RENDER_OPTIONS?.local_client); }
 function listValue(value) { return Array.isArray(value) ? value : []; }
 
 export {
@@ -91,6 +92,7 @@ export {
   formatMessage,
   hasMetricValue,
   listValue,
+  localFileRevealEnabled,
   lower,
   modelDisplayName,
   scriptJson,

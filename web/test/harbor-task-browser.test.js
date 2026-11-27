@@ -276,3 +276,56 @@ test("scoring draft previews preserve source on errors and ignore responses afte
   assert.equal(taskBrowser.currentFile().path, "instruction.md");
   assert.equal(root.querySelector(".task-scoring-preview"), null);
 });
+
+test("localhost Task browser reveals previewable and metadata-only files, hides in resources/remote mode, and reports errors", async () => {
+  const revealed = [];
+  let fail = false;
+  const root = document.createElement("div");
+  root.innerHTML = `
+    <div data-harbor-file-tree></div>
+    <header class="harbor-editor-head"><div><strong data-harbor-editor-path></strong><span data-harbor-editor-meta></span></div></header>
+    <textarea data-harbor-editor readonly></textarea>
+  `;
+  const taskBrowser = createTaskBrowser({
+    root,
+    editable: false,
+    canReveal: () => true,
+    readFile: async (_ref, path) => ({ path, content: "# Hello", revision: "r1" }),
+    revealFile: async (ref, path) => {
+      revealed.push({ ref, path });
+      if (fail) throw new Error("file manager unavailable");
+      return { revealed: true };
+    },
+  });
+  const taskDetail = detail();
+  taskDetail.tree.push({ path: "environment/data/raw.bin", kind: "file", size: 8, previewable: false, editable: false });
+  await taskBrowser.setTaskDetail(taskDetail, { taskRef: { dataset_id: "ds", task: "t1" } });
+
+  const revealBtn = root.querySelector(".harbor-editor-actions [data-file-reveal]");
+  assert.ok(revealBtn);
+  assert.equal(revealBtn.hidden, false);
+  revealBtn.click(); await tick();
+  assert.deepEqual(revealed.at(-1), { ref: { dataset_id: "ds", task: "t1" }, path: "instruction.md" });
+
+  await taskBrowser.openPath("environment/data/raw.bin");
+  assert.equal(revealBtn.hidden, false);
+  fail = true;
+  revealBtn.click(); await tick();
+  assert.deepEqual(revealed.at(-1), { ref: { dataset_id: "ds", task: "t1" }, path: "environment/data/raw.bin" });
+  assert.match(root.querySelector("[data-task-reveal-error]").textContent, /file manager unavailable/);
+
+  taskBrowser.showResources("files");
+  assert.equal(revealBtn.hidden, true);
+  assert.equal(root.querySelector("[data-task-reveal-error]").hidden, true);
+
+  const remoteRoot = document.createElement("div");
+  remoteRoot.innerHTML = '<header class="harbor-editor-head"><div><strong data-harbor-editor-path></strong></div></header><textarea data-harbor-editor readonly></textarea>';
+  const remoteBrowser = createTaskBrowser({
+    root: remoteRoot,
+    editable: false,
+    canReveal: () => false,
+    readFile: async () => ({ path: "instruction.md", content: "hi" }),
+  });
+  await remoteBrowser.setTaskDetail(detail(), { taskRef: { dataset_id: "ds", task: "t1" } });
+  assert.equal(remoteRoot.querySelector("[data-file-reveal]"), null);
+});

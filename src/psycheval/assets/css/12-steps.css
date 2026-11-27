@@ -27,6 +27,9 @@
   cursor:pointer;
   box-shadow:0 4px 10px rgba(49,42,25,.10);
 }
+.action-button[hidden] {
+  display:none;
+}
 .action-button:hover:not(:disabled) {
   border-color:var(--focus);
   background:var(--surface-2);

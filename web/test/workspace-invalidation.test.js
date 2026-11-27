@@ -30,6 +30,14 @@ test("successful mutations map to stable Workspace invalidation domains", () => 
   assert.deepEqual(domains("/api/prompts/task-audit", "PUT", {}), ["prompt-assets"]);
   assert.deepEqual(domains("/api/reports", "GET", undefined), []);
   assert.deepEqual(domains("/api/source-key-resolutions", "POST", { items: [] }), []);
+  assert.deepEqual(
+    domains("/api/harbor/datasets/demo/tasks/task/reveal", "POST", { path: "instruction.md" }),
+    [],
+  );
+  assert.deepEqual(
+    domains("/api/verification-files/source-1/0123456789abcdef01234567/reveal", "POST", {}),
+    [],
+  );
 });
 
 test("server declarations invalidate canonical detail on successful and committed failed deletions", async () => {

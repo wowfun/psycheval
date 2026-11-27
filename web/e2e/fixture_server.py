@@ -502,6 +502,22 @@ def main() -> None:
                     server_header=False,
                     log_config=None,
                 )
+                if reveal_log := os.environ.get("PEVAL_E2E_REVEAL_LOG"):
+                    log_path = Path(reveal_log)
+
+                    def record_reveal(target: Path) -> None:
+                        with log_path.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                json.dumps({"path": str(target)}, ensure_ascii=False)
+                                + "\n"
+                            )
+
+                    resources.enter_context(
+                        patch(
+                            "psycheval.serve.file_reveal.reveal_in_file_manager",
+                            side_effect=record_reveal,
+                        )
+                    )
                 with patch(
                     "psycheval.serve.assets.download_echarts_asset",
                     side_effect=RuntimeError(

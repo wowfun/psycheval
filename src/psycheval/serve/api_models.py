@@ -277,6 +277,14 @@ class FileCreateRequest(StrictRequest):
     content: str | None = None
 
 
+class EmptyRequest(StrictRequest):
+    pass
+
+
+class TaskFileRevealRequest(StrictRequest):
+    path: str = Field(min_length=1, max_length=4096)
+
+
 class MountCreateRequest(StrictRequest):
     path: BrowserPath
 

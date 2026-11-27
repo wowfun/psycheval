@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -31,6 +32,66 @@ def role_for(request: Request) -> str:
 def require_admin(request: Request) -> None:
     if role_for(request) != ADMIN_ROLE:
         raise ProblemException(403, "administrator access required")
+
+
+_FORWARDING_HEADERS = (
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-real-ip",
+)
+
+
+def _is_loopback_ip(value: str) -> bool:
+    text = value.strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    host = text.partition("%")[0]
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
+
+
+def _is_localhost_host_header(host: str | None) -> bool:
+    if not host:
+        return False
+    try:
+        parsed = urlsplit(f"http://{host.strip()}")
+    except ValueError:
+        return False
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    hostname = parsed.hostname.lower().rstrip(".")
+    return hostname == "localhost" or _is_loopback_ip(hostname)
+
+
+def is_localhost_request(request: Request) -> bool:
+    """Return True only for direct loopback connections targeting localhost."""
+    if request.client is None or not _is_loopback_ip(request.client.host):
+        return False
+    if not _is_localhost_host_header(request.headers.get("host")):
+        return False
+    if any(request.headers.get(name) is not None for name in _FORWARDING_HEADERS):
+        return False
+    return True
+
+
+def require_localhost(request: Request) -> None:
+    if not is_localhost_request(request):
+        raise ProblemException(
+            403, "file manager reveal is only available on localhost"
+        )
 
 
 def role_for_websocket(websocket: WebSocket) -> str:

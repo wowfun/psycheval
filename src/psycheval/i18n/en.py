@@ -1070,4 +1070,5 @@ EN_MESSAGES: dict[str, str] = {
     "task_custom_list_hint": "Separate multiple values with commas",
     "task_summary_list_overlap": "A Task can belong to multiple values; group counts may overlap.",
     "edit": "Edit",
+    "reveal_in_file_manager": "Reveal in file manager",
 }

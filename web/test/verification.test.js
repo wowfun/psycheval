@@ -334,3 +334,42 @@ test("structured scores expose JSON without replacing their recorded metrics", a
   assert.ok(browser.element.querySelector(".verification-metrics"));
   assert.equal(browser.element.querySelector(".json-view"), null);
 });
+
+test("localhost reveal button appears for text, image, and metadata-only files and stays hidden remotely", async () => {
+  const calls = [];
+  let failReveal = false;
+  const makeRequest = async (path, options = {}) => {
+    calls.push({ path, method: options.method || "GET", body: options.body });
+    if (path.endsWith("/reveal")) {
+      if (failReveal) throw new Error("native file manager unavailable");
+      return { revealed: true };
+    }
+    return { content: "hello" };
+  };
+  const localBrowser = createVerificationBrowser({ request: makeRequest, canReveal: () => true });
+  localBrowser.setSource("trial-1");
+
+  await localBrowser.open(entry("verifier/log.txt", "id-text"));
+  const textBtn = localBrowser.element.querySelector("[data-file-reveal]");
+  assert.ok(textBtn);
+  textBtn.click(); await tick();
+  assert.deepEqual(calls.at(-1), { path: "/api/verification-files/trial-1/id-text/reveal", method: "POST", body: {} });
+
+  await localBrowser.open({ path: "artifacts/chart.png", id: "id-img", kind: "file", size: 64, preview_kind: "image", previewable: true });
+  const imgBtn = localBrowser.element.querySelector("[data-file-reveal]");
+  assert.ok(imgBtn);
+  imgBtn.click(); await tick();
+  assert.deepEqual(calls.at(-1), { path: "/api/verification-files/trial-1/id-img/reveal", method: "POST", body: {} });
+
+  await localBrowser.open({ path: "artifacts/report.xlsx", id: "id-bin", kind: "file", size: 1024, preview_kind: null, previewable: false });
+  const binBtn = localBrowser.element.querySelector("[data-file-reveal]");
+  assert.ok(binBtn);
+  failReveal = true;
+  binBtn.click(); await tick();
+  assert.match(localBrowser.element.querySelector("[data-verification-notice]").textContent, /unavailable/);
+
+  const remoteBrowser = createVerificationBrowser({ request: makeRequest, canReveal: () => false });
+  remoteBrowser.setSource("trial-1");
+  await remoteBrowser.open(entry("verifier/log.txt", "id-text"));
+  assert.equal(remoteBrowser.element.querySelector("[data-file-reveal]"), null);
+});

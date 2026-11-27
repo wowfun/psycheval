@@ -38,6 +38,7 @@ from psycheval.config import (
 )
 from psycheval.file_access import FileLeaseTimeout
 from psycheval.html import render_serve_html
+from psycheval.serve import file_reveal
 from psycheval.serve.access import (
     ADMIN_ROLE,
     GUEST_ROLE,
@@ -56,9 +57,11 @@ from psycheval.serve.api_access import (
     ADMIN_ACCESS,
     GUEST_ACCESS,
     access,
+    is_localhost_request,
     mutation_guard,
     require_admin,
     require_admin_websocket,
+    require_localhost,
     require_same_origin_websocket,
     role_for,
 )
@@ -121,6 +124,7 @@ from psycheval.serve.api_models import (
     SourceStateOperationRequest,
     TaskCreateRequest,
     TaskDeletionRequest,
+    TaskFileRevealRequest,
     TaskPatchRequest,
     TaskStateOperationRequest,
     ViewDeletionRequest,
@@ -159,6 +163,7 @@ from psycheval.serve.assets import (
 )
 from psycheval.serve.errors import HttpError
 from psycheval.serve.exports import build_serve_export, build_summary_serve_export
+from psycheval.serve.file_reveal import FileRevealUnavailable
 from psycheval.serve.harbor_workspace import (
     HarborWorkspaceError,
     config_revision,
@@ -600,6 +605,7 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
             workspace_description=runtime.config.description,
             role=role,
             authentication_enabled=access_control.authentication_enabled,
+            local_client=(role == ADMIN_ROLE and is_localhost_request(request)),
             serve_page=page,
             csp_nonce=csp_nonce,
         ),
@@ -1703,6 +1709,33 @@ def _register_harbor_file_routes(app: FastAPI) -> None:
         return _operation_response(
             runtime.operation(result["operation"]["operation_id"])
         )
+
+    @app.post(
+        "/api/harbor/datasets/{dataset_id}/tasks/{task}/reveal",
+        dependencies=[
+            Depends(require_admin),
+            Depends(require_localhost),
+            Depends(mutation_guard),
+        ],
+    )
+    @access(ADMIN_ACCESS)
+    def reveal_harbor_file(
+        request: Request,
+        dataset_id: str,
+        task: str,
+        body: TaskFileRevealRequest,
+    ) -> JSONResponse:
+        runtime: ServeRuntime = request.app.state.runtime
+        path = harbor_workspace(runtime.store, runtime).resolve_task_file_path(
+            dataset_id, task, body.path
+        )
+        try:
+            file_reveal.reveal_in_file_manager(path)
+        except FileRevealUnavailable as exc:
+            raise ProblemException(503, str(exc)) from exc
+        except ValueError as exc:
+            raise ProblemException(404, str(exc)) from exc
+        return _json({"revealed": True})
 
 
 def _register_harbor_mount_routes(app: FastAPI) -> None:

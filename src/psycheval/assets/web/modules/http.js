@@ -78,7 +78,7 @@ function publishInvalidations(response, path, method, body) {
 
 function requestInvalidations(path, method, body) {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return [];
-  if (/^\/api\/harbor\/(?:task-exports$|datasets\/[^/]+\/tasks\/[^/]+\/preview$)/.test(path)) return [];
+  if (/^\/api\/harbor\/(?:task-exports$|datasets\/[^/]+\/tasks\/[^/]+\/(?:preview|reveal)$)/.test(path)) return [];
   const changes = new Set();
   if (path !== "/api/source-key-resolutions" && /^\/api\/(?:sources|source-|analysis)/.test(path)) {
     changes.add("catalog");

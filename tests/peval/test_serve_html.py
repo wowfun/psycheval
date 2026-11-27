@@ -78,11 +78,16 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "effective_timezone": "UTC",
                 "role": "guest",
                 "authentication_enabled": False,
+                "local_client": False,
                 "initial_page": "home",
                 "csp_nonce": "static-render",
             },
         )
         self.assertEqual(html.count('nonce="static-render"'), 3)
+        local_html = render_serve_html(
+            workspace_id="workspace-one", role="admin", local_client=True
+        )
+        self.assertTrue(script_json(local_html, "peval-render-options")["local_client"])
 
     def test_workspace_stylesheet_preserves_fragment_order(self) -> None:
         asset_root = Path(__file__).resolve().parents[2] / "src/psycheval/assets"

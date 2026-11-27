@@ -154,6 +154,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
     assert.equal(document.querySelector("[data-harbor-editor]").value, "echo done");
     assert.equal(document.querySelector("[data-harbor-editor]").readOnly, true);
     assert.equal(document.querySelector("[data-harbor-download]"), null);
+    assert.equal(document.querySelector("[data-file-reveal]"), null);
   } finally {
     globalThis.fetch = previousFetch;
   }

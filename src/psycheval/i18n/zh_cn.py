@@ -1070,4 +1070,5 @@ ZH_CN_MESSAGES: dict[str, str] = {
     "task_custom_list_hint": "多个值请用逗号分隔",
     "task_summary_list_overlap": "一个任务可属于多个值，分组计数可能重叠。",
     "edit": "编辑",
+    "reveal_in_file_manager": "在文件管理器中显示",
 }

@@ -160,7 +160,9 @@ Workspace source resolution owns direct access to a selected retained Trial's
 effective result directory independently of live Tasks. Verification file access
 owns bounded file enumeration, preview, and download within that directory. The
 `serve.verification` module owns its read-only HTTP routes; `state.verification_files`
-owns filesystem access and content limits. The
+owns filesystem access and content limits. `serve.file_reveal` owns local-only,
+administrator-triggered native file manager reveal for paths already validated by
+`state.verification_files` or `serve.harbor_workspace`. The
 browser shares file-tree and selection primitives between Task editing and
 read-only verification; format renderers interpret selected retained documents
 without changing the canonical score projection.

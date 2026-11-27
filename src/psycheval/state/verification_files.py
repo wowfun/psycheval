@@ -118,22 +118,41 @@ def verification_file_tree(data_dir: Path, root: Path) -> list[dict[str, Any]]:
     return result
 
 
-def read_verification_file(
-    data_dir: Path, root: Path, file_id: str, *, download: bool = False
-) -> dict[str, Any] | HarborVerifierArtifact | HarborVerifierArtifactStream:
+def _resolve_verification_entry(
+    data_dir: Path, root: Path, file_id: str
+) -> tuple[dict[str, Any], Path]:
     # Re-enumeration binds an opaque ID to the current allowlisted tree, never a
     # browser-supplied filesystem path or a stale cached absolute path.
     entry = next(
         (
             item
             for item in verification_file_tree(data_dir, root)
-            if item.get("id") == file_id
+            if item.get("kind") == "file" and item.get("id") == file_id
         ),
         None,
     )
     if entry is None:
         raise ValueError("unknown verification file")
     path = data_dir / entry["path"]
+    _assert_contained(root, path)
+    if _is_link(path):
+        raise ValueError("unknown verification file")
+    value = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(value.st_mode):
+        raise ValueError("unknown verification file")
+    return entry, path
+
+
+def resolve_verification_file_path(data_dir: Path, root: Path, file_id: str) -> Path:
+    """Resolve an opaque verification file ID to its verified regular file path."""
+    _, path = _resolve_verification_entry(data_dir, root, file_id)
+    return path.resolve(strict=True)
+
+
+def read_verification_file(
+    data_dir: Path, root: Path, file_id: str, *, download: bool = False
+) -> dict[str, Any] | HarborVerifierArtifact | HarborVerifierArtifactStream:
+    entry, path = _resolve_verification_entry(data_dir, root, file_id)
     if download:
         handle, opened = _open_regular(
             root, path, max_bytes=ARTIFACT_DOWNLOAD_MAX_BYTES
