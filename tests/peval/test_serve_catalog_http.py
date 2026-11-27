@@ -406,6 +406,56 @@ class ServeCatalogHttpTests(CatalogHttpTestCase):
             finally:
                 self.stop(store, server, thread)
 
+    def test_catalog_http_preserves_commas_in_model_and_agent_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dsh_model = '["mimo","mimo-v2.6-flash"]'
+            for index, (agent_name, model_name) in enumerate(
+                (
+                    ("dsh", dsh_model),
+                    ("agent, custom", "mimo/mimo-v2.6-flash#high"),
+                )
+            ):
+                cell = root / f"runs/default/psychevo/m{index}/m{index}_t001"
+                write_trial_cell_artifacts(
+                    cell,
+                    session_id=f"m{index}",
+                    trial_key=f"m{index}_t001",
+                )
+                trajectory_path = cell / "agent" / "trajectory.json"
+                trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+                trajectory["agent"]["name"] = agent_name
+                trajectory["agent"]["model_name"] = model_name
+                trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+
+            store, _runtime, server, thread = self.running_server(root)
+            try:
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    "/api/catalog?model=%5B%22mimo%22%2C%22mimo-v2.6-flash%22%5D",
+                )
+                self.assertEqual(status, 200)
+                filtered = json.loads(body)
+                self.assertEqual(filtered["total"], 1)
+                self.assertEqual(filtered["items"][0]["model"], dsh_model)
+                self.assertEqual(
+                    filtered["facets"]["models"],
+                    [{"value": dsh_model, "count": 1}],
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    "/api/catalog?agent=agent%2C%20custom",
+                )
+                self.assertEqual(status, 200)
+                by_agent = json.loads(body)
+                self.assertEqual(by_agent["total"], 1)
+                self.assertEqual(by_agent["items"][0]["agent_name"], "agent, custom")
+            finally:
+                self.stop(store, server, thread)
+
     def test_checking_serves_old_page_and_rejects_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

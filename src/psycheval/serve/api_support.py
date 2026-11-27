@@ -109,15 +109,6 @@ def catalog_query(raw_query: str) -> CatalogQuery:
         except ValueError as exc:
             raise HttpError(400, f"{key} must be an integer") from exc
 
-    def many(*keys: str) -> tuple[str, ...]:
-        result: list[str] = []
-        for key in keys:
-            for raw in values.get(key, []):
-                result.extend(
-                    part.strip() for part in str(raw).split(",") if part.strip()
-                )
-        return tuple(dict.fromkeys(result))
-
     def repeated(*keys: str) -> tuple[str, ...]:
         result = [
             str(raw).strip()
@@ -137,10 +128,10 @@ def catalog_query(raw_query: str) -> CatalogQuery:
             sort=first("sort", "last_turn_end"),
             direction=first("direction", "desc"),
             categories=repeated("category", "categories"),
-            tags=many("tag", "tags"),
-            agents=many("agent", "agents"),
-            models=many("model", "models"),
-            results=many("result", "results"),
+            tags=repeated("tag", "tags"),
+            agents=repeated("agent", "agents"),
+            models=repeated("model", "models"),
+            results=repeated("result", "results"),
             tasks=repeated("task", "tasks"),
             jobs=repeated("job", "jobs"),
             providers=repeated("provider", "providers"),
