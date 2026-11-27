@@ -125,7 +125,7 @@ def test_removed_distribution_smoke_helpers_do_not_survive_as_dead_code() -> Non
 
 
 def test_user_facing_examples_use_installed_cli_entrypoints() -> None:
-    paths = [ROOT / "README.md"]
+    paths = [ROOT / "README.md", ROOT / "README.zh-CN.md"]
     paths.extend((ROOT / "docs").rglob("*.md"))
     paths.extend((ROOT / "skills/peval").rglob("*.md"))
 

@@ -1,6 +1,11 @@
 {
   "pairs": [
     {
+      "source": "README.md",
+      "translation": "README.zh-CN.md",
+      "source_sha256": "bb98e03af9e9f2a6a975aa759abbdeb3e335d5ab1db26e3989812feae45d130e"
+    },
+    {
       "source": "docs/user/peval/index.md",
       "translation": "docs/i18n/zh-CN/user/peval/index.md",
       "source_sha256": "cb2d12ec38463077a13b9afca421edee6251c52c40127a48c1f68102e2781df6"

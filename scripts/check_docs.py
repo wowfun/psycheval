@@ -33,6 +33,7 @@ REQUIRED_DOCS = {
     "docs/user/pbench/scoring.md",
 }
 PAIRED_SOURCES = {
+    "README.md",
     "docs/user/peval/index.md",
     "docs/user/peval/inputs-and-adapters.md",
     "docs/user/peval/reports.md",
@@ -44,7 +45,7 @@ MARKDOWN = MarkdownIt()
 
 
 def active_markdown() -> list[Path]:
-    roots = [ROOT / "AGENTS.md", ROOT / "README.md"]
+    roots = [ROOT / "AGENTS.md", ROOT / "README.md", ROOT / "README.zh-CN.md"]
     roots.extend((ROOT / "docs").rglob("*.md"))
     roots.extend((ROOT / "skills/peval").rglob("*.md"))
     return sorted({path.resolve() for path in roots if path.is_file()})
@@ -168,7 +169,7 @@ def pair_failures() -> list[str]:
     sources = {item.get("source") for item in pairs}
     if sources != PAIRED_SOURCES:
         failures.append(
-            "translation manifest does not list exactly the four peval guides"
+            "translation manifest does not match the paired English sources"
         )
     translations: set[str] = set()
     for item in pairs:

@@ -1,5 +1,7 @@
 # Psycheval
 
+[简体中文](README.zh-CN.md)
+
 Psycheval runs Harbor-compatible evaluations, converts Agent sessions to ATIF,
 and inspects evaluation workspaces. Its installed CLI is named `peval`; that is
 a short command name, not a Python package namespace.

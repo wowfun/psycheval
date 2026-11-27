@@ -1,8 +1,8 @@
 # Translations
 
-English documentation is authoritative. The four Chinese peval user guides are
-paired in `pairs.json`; each entry records the SHA-256 of its English source.
-Update both pages, review them together, then run:
+English documentation is authoritative. The Chinese README and the four Chinese
+peval user guides are paired in `pairs.json`; each entry records the SHA-256 of
+its English source. Update both pages, review them together, then run:
 
 ```console
 uv run python scripts/check_docs.py --record-pairs
